@@ -71,6 +71,21 @@ enum PhotoTexturedMeshBuilder {
         name: String = "room_full.usdz"
     ) -> String? {
         guard let scene = makeScene(anchors: anchors, keyframes: keyframes) else { return nil }
+        return writeScene(scene, to: directory, name: name)
+    }
+
+    /// Preferred path: export from deep-copied chunks (safe after long scans).
+    static func exportChunks(
+        _ chunks: [CapturedMeshChunk],
+        keyframes: [Keyframe],
+        to directory: URL,
+        name: String = "room_full.usdz"
+    ) -> String? {
+        guard let scene = makeScene(chunks: chunks, keyframes: keyframes) else { return nil }
+        return writeScene(scene, to: directory, name: name)
+    }
+
+    private static func writeScene(_ scene: SCNScene, to directory: URL, name: String) -> String? {
         let usdz = directory.appendingPathComponent(name)
         if scene.write(to: usdz, options: nil, delegate: nil, progressHandler: nil) {
             return name
@@ -81,6 +96,109 @@ enum PhotoTexturedMeshBuilder {
             return scnName
         }
         return nil
+    }
+
+    static func makeScene(
+        chunks: [CapturedMeshChunk],
+        keyframes: [Keyframe]
+    ) -> SCNScene? {
+        guard !chunks.isEmpty else { return nil }
+        let scene = SCNScene()
+        scene.background.contents = UIColor(red: 0.06, green: 0.07, blue: 0.10, alpha: 1)
+
+        var any = false
+        for chunk in chunks {
+            if let node = node(from: chunk, keyframes: keyframes) {
+                scene.rootNode.addChildNode(node)
+                any = true
+            }
+        }
+        guard any else { return nil }
+
+        let ambient = SCNNode()
+        ambient.light = SCNLight()
+        ambient.light?.type = .ambient
+        ambient.light?.intensity = 900
+        ambient.light?.color = UIColor.white
+        scene.rootNode.addChildNode(ambient)
+
+        let cam = SCNNode()
+        cam.camera = SCNCamera()
+        cam.camera?.fieldOfView = 60
+        cam.camera?.wantsHDR = true
+        cam.camera?.zNear = 0.01
+        cam.camera?.zFar = 80
+        cam.position = SCNVector3(Float(2.2), Float(1.5), Float(3.0))
+        cam.eulerAngles = SCNVector3(Float(-0.28), Float(0.5), Float(0))
+        scene.rootNode.addChildNode(cam)
+        return scene
+    }
+
+    private static func node(from chunk: CapturedMeshChunk, keyframes: [Keyframe]) -> SCNNode? {
+        guard let geom = geometry(from: chunk, keyframes: keyframes) else { return nil }
+        let n = SCNNode(geometry: geom)
+        n.simdTransform = chunk.transform
+        return n
+    }
+
+    private static func geometry(from chunk: CapturedMeshChunk, keyframes: [Keyframe]) -> SCNGeometry? {
+        let vCount = chunk.positions.count
+        guard vCount > 0, !chunk.indices.isEmpty else { return nil }
+
+        var positions = [Float](repeating: 0, count: vCount * 3)
+        var colors = [Float](repeating: 0, count: vCount * 4)
+        var normalsArr = [Float](repeating: 0, count: vCount * 3)
+        let transform = chunk.transform
+
+        for i in 0..<vCount {
+            let local = chunk.positions[i]
+            positions[i * 3] = local.x
+            positions[i * 3 + 1] = local.y
+            positions[i * 3 + 2] = local.z
+
+            let nLocal = i < chunk.normals.count ? chunk.normals[i] : SIMD3<Float>(0, 1, 0)
+            normalsArr[i * 3] = nLocal.x
+            normalsArr[i * 3 + 1] = nLocal.y
+            normalsArr[i * 3 + 2] = nLocal.z
+
+            let world4 = transform * SIMD4<Float>(local.x, local.y, local.z, 1)
+            let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+            let nWorld4 = transform * SIMD4<Float>(nLocal.x, nLocal.y, nLocal.z, 0)
+            let nWorld = simd_normalize(SIMD3<Float>(nWorld4.x, nWorld4.y, nWorld4.z))
+
+            if let rgb = sampleBestColor(world: world, normal: nWorld, keyframes: keyframes) {
+                colors[i * 4] = rgb.x
+                colors[i * 4 + 1] = rgb.y
+                colors[i * 4 + 2] = rgb.z
+                colors[i * 4 + 3] = 1
+            } else {
+                let f = fallbackColor(y: world.y)
+                colors[i * 4] = f.x
+                colors[i * 4 + 1] = f.y
+                colors[i * 4 + 2] = f.z
+                colors[i * 4 + 3] = 1
+            }
+        }
+
+        let sources: [SCNGeometrySource] = [
+            source(positions, semantic: .vertex, components: 3, count: vCount),
+            source(normalsArr, semantic: .normal, components: 3, count: vCount),
+            source(colors, semantic: .color, components: 4, count: vCount),
+        ]
+
+        var idx = chunk.indices
+        let iData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
+        let primCount = chunk.indices.count / 3
+        guard primCount > 0 else { return nil }
+        let element = SCNGeometryElement(
+            data: iData,
+            primitiveType: .triangles,
+            primitiveCount: primCount,
+            bytesPerIndex: MemoryLayout<UInt32>.size
+        )
+        let geom = SCNGeometry(sources: sources, elements: [element])
+        geom.materials = [photoMaterial()]
+        return geom
     }
 
     // MARK: - Geometry

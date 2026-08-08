@@ -48,6 +48,7 @@ struct FullEnvironmentScanView: View {
             FullEnvARContainer(model: model)
                 .ignoresSafeArea()
 
+            // Soft edge vignette so camera stays readable (no heavy mesh overlay)
             VStack(spacing: 0) {
                 scanTopBar
                 Spacer()
@@ -117,7 +118,7 @@ struct FullEnvironmentScanView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.blue)
-                    .disabled(model.meshChunks < 3)
+                    .disabled(model.meshChunks < 2)
 
                 case .processing:
                     HStack(spacing: 12) {
@@ -164,11 +165,10 @@ struct FullEnvironmentScanView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    // MARK: - Preview before save (app design language)
+    // MARK: - Preview before save
 
     private var previewLayer: some View {
         VStack(spacing: 0) {
-            // Header
             HStack {
                 Button {
                     model.rescan()
@@ -190,7 +190,6 @@ struct FullEnvironmentScanView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
 
-            // 3D preview
             ZStack {
                 if let url = model.previewMeshURL {
                     PreviewMeshView(url: url)
@@ -222,7 +221,6 @@ struct FullEnvironmentScanView: View {
             }
             .frame(maxHeight: .infinity)
 
-            // Save card (matches EnviroMap light-card language on dark)
             VStack(alignment: .leading, spacing: 14) {
                 Text("Looks Good?")
                     .font(.title3.weight(.bold))
@@ -329,7 +327,7 @@ struct FullEnvironmentScanView: View {
     }
 }
 
-// MARK: - Lightweight preview SCNView
+// MARK: - Preview SCNView
 
 struct PreviewMeshView: UIViewRepresentable {
     let url: URL
@@ -339,13 +337,11 @@ struct PreviewMeshView: UIViewRepresentable {
         v.backgroundColor = UIColor(red: 0.07, green: 0.08, blue: 0.12, alpha: 1)
         v.allowsCameraControl = true
         v.autoenablesDefaultLighting = false
-        v.antialiasingMode = .multisampling4X
+        v.antialiasingMode = .multisampling2X
         DispatchQueue.global(qos: .userInitiated).async {
             if let scene = try? SCNScene(url: url, options: [
                 .createNormalsIfAbsent: true,
-                .checkConsistency: true,
             ]) {
-                // Ensure photo vertex colors render
                 scene.rootNode.enumerateChildNodes { node, _ in
                     guard let mats = node.geometry?.materials else { return }
                     for mat in mats {
@@ -384,12 +380,7 @@ struct PreviewMeshView: UIViewRepresentable {
 @MainActor
 final class FullEnvironmentScanModel: ObservableObject {
     enum Phase: Equatable {
-        case idle
-        case scanning
-        case processing
-        case preview
-        case saving
-        case failed(String)
+        case idle, scanning, processing, preview, saving, failed(String)
     }
 
     struct ExportPayload {
@@ -418,7 +409,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Point at everything — furniture, floor, walls, objects. Blue mesh = captured."
+        instruction = "Point at everything — furniture, floor, walls, objects. Stats climb as you cover more."
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
@@ -435,9 +426,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         controller.start()
     }
 
-    func stop() {
-        controller.stop()
-    }
+    func stop() { controller.stop() }
 
     func rescan() {
         controller.stop()
@@ -475,26 +464,35 @@ final class FullEnvironmentScanModel: ObservableObject {
 
 struct FullEnvARContainer: UIViewControllerRepresentable {
     @ObservedObject var model: FullEnvironmentScanModel
-
-    func makeUIViewController(context: Context) -> FullEnvScanController {
-        model.controller
-    }
-
+    func makeUIViewController(context: Context) -> FullEnvScanController { model.controller }
     func updateUIViewController(_ uiViewController: FullEnvScanController, context: Context) {}
 }
 
-// MARK: - ARKit controller
+// MARK: - Copied mesh (safe after ARKit invalidates anchors)
 
-final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessionDelegate {
+struct CapturedMeshChunk {
+    let id: UUID
+    let transform: simd_float4x4
+    let positions: [SIMD3<Float>]
+    let normals: [SIMD3<Float>]
+    let indices: [UInt32]
+}
+
+// MARK: - ARKit controller (stable long scans)
+
+final class FullEnvScanController: UIViewController, ARSessionDelegate {
     private var arView: ARSCNView!
     private var isRunning = false
 
     private let stateLock = NSLock()
-    private var meshAnchors: [UUID: ARMeshAnchor] = [:]
+    /// Copied geometry only — never keep live ARMeshAnchor refs long-term
+    private var chunks: [UUID: CapturedMeshChunk] = [:]
     private var keyframes: [PhotoTexturedMeshBuilder.Keyframe] = []
     private var lastKeyframeTime: TimeInterval = 0
+    private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 72
+    private let maxKeyframes = 48
+    private let maxChunks = 120
 
     var onStats: ((Int, Int) -> Void)?
     var onError: ((String) -> Void)?
@@ -503,12 +501,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         super.viewDidLoad()
         view.backgroundColor = .black
 
+        // Camera only — no SceneKit mesh rebuilds (those froze long scans)
         let scn = ARSCNView(frame: view.bounds)
         scn.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        scn.delegate = self
         scn.session.delegate = self
         scn.automaticallyUpdatesLighting = true
         scn.scene = SCNScene()
+        // No custom mesh overlay during capture
+        scn.rendersCameraGrain = false
         view.addSubview(scn)
         arView = scn
     }
@@ -521,9 +521,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         stateLock.lock()
-        meshAnchors.removeAll()
+        chunks.removeAll()
         keyframes.removeAll()
         lastKeyframeTime = 0
+        lastMeshCopyTime = 0
         lastStatsEmit = 0
         stateLock.unlock()
 
@@ -534,7 +535,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             config.sceneReconstruction = .mesh
         }
         config.environmentTexturing = .automatic
-        config.planeDetection = [.horizontal, .vertical]
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             config.frameSemantics.insert(.sceneDepth)
         }
@@ -543,33 +543,29 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
 
-    func stopCapturing() {
-        isRunning = false
-    }
+    func stopCapturing() { isRunning = false }
 
     func stop() {
         isRunning = false
         arView?.session.pause()
     }
 
-    func snapshot() -> UIImage? {
-        arView?.snapshot()
-    }
+    func snapshot() -> UIImage? { arView?.snapshot() }
 
     func buildExport() -> FullEnvironmentScanModel.ExportPayload? {
         stateLock.lock()
-        let anchors = Array(meshAnchors.values)
+        let meshChunks = Array(chunks.values)
         let frames = keyframes
         stateLock.unlock()
 
-        guard !anchors.isEmpty else { return nil }
+        guard !meshChunks.isEmpty else { return nil }
 
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("EnviroMapFull_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        guard let fileName = PhotoTexturedMeshBuilder.export(
-            anchors: anchors,
+        guard let fileName = PhotoTexturedMeshBuilder.exportChunks(
+            meshChunks,
             keyframes: frames,
             to: tmp
         ) else { return nil }
@@ -577,67 +573,119 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         return .init(directory: tmp, fileName: fileName)
     }
 
-    // MARK: Mesh viz
+    // MARK: ARSessionDelegate
 
-    func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
-        guard anchor is ARMeshAnchor else { return nil }
-        return SCNNode()
-    }
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        guard isRunning else { return }
+        let t = frame.timestamp
 
-    func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
-        guard let mesh = anchor as? ARMeshAnchor else { return }
-        stateLock.lock()
-        meshAnchors[mesh.identifier] = mesh
-        stateLock.unlock()
-        updateViz(node: node, mesh: mesh)
-        emitStatsThrottled()
-    }
-
-    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard let mesh = anchor as? ARMeshAnchor else { return }
-        stateLock.lock()
-        meshAnchors[mesh.identifier] = mesh
-        stateLock.unlock()
-        updateViz(node: node, mesh: mesh)
-        emitStatsThrottled()
-    }
-
-    func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
-        stateLock.lock()
-        meshAnchors.removeValue(forKey: anchor.identifier)
-        stateLock.unlock()
-        emitStatsThrottled()
-    }
-
-    private func updateViz(node: SCNNode, mesh: ARMeshAnchor) {
-        guard let geom = Self.quickGeometry(mesh.geometry) else { return }
-        // SceneKit node updates should be on main / render thread — renderer callbacks are OK
-        node.geometry = geom
-    }
-
-    private static func quickGeometry(_ mesh: ARMeshGeometry) -> SCNGeometry? {
-        let vCount = mesh.vertices.count
-        guard vCount > 0, mesh.faces.count > 0 else { return nil }
-
-        var positions = [Float](repeating: 0, count: vCount * 3)
-        for i in 0..<vCount {
-            let p = mesh.vertices.buffer.contents()
-                .advanced(by: mesh.vertices.offset + mesh.vertices.stride * i)
-                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
-            positions[i * 3] = p.x
-            positions[i * 3 + 1] = p.y
-            positions[i * 3 + 2] = p.z
+        // Copy mesh from frame anchors (throttled) — safe snapshot
+        if t - lastMeshCopyTime >= 0.35 {
+            lastMeshCopyTime = t
+            ingestMeshes(from: frame)
         }
-        let posData = positions.withUnsafeBufferPointer { Data(buffer: $0) }
-        let source = SCNGeometrySource(
-            data: posData, semantic: .vertex, vectorCount: vCount,
-            usesFloatComponents: true, componentsPerVector: 3,
-            bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0,
-            dataStride: MemoryLayout<Float>.size * 3
+
+        // Color keyframes (throttled)
+        if t - lastKeyframeTime >= 0.28 {
+            lastKeyframeTime = t
+            ingestKeyframe(from: frame)
+        }
+    }
+
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        DispatchQueue.main.async { [weak self] in
+            self?.onError?(error.localizedDescription)
+        }
+    }
+
+    private func ingestMeshes(from frame: ARFrame) {
+        var copied: [CapturedMeshChunk] = []
+        for anchor in frame.anchors {
+            guard let mesh = anchor as? ARMeshAnchor else { continue }
+            if let chunk = Self.copyChunk(from: mesh) {
+                copied.append(chunk)
+            }
+        }
+        guard !copied.isEmpty else { return }
+
+        stateLock.lock()
+        for c in copied {
+            chunks[c.id] = c
+        }
+        // Cap memory on very long scans
+        if chunks.count > maxChunks {
+            let sorted = chunks.keys.prefix(chunks.count - maxChunks)
+            for k in sorted { chunks.removeValue(forKey: k) }
+        }
+        let meshCount = chunks.count
+        let frameCount = keyframes.count
+        stateLock.unlock()
+
+        emitStats(meshCount: meshCount, frameCount: frameCount)
+    }
+
+    private func ingestKeyframe(from frame: ARFrame) {
+        guard let copied = Self.copyPixelBuffer(frame.capturedImage) else { return }
+
+        let orientation: UIInterfaceOrientation = .portrait
+        let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
+        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
+
+        let kf = PhotoTexturedMeshBuilder.Keyframe(
+            camera: frame.camera,
+            image: copied,
+            orientation: orientation,
+            viewport: viewport,
+            displayTransform: display,
+            capturedAt: frame.timestamp
         )
 
+        stateLock.lock()
+        keyframes.append(kf)
+        if keyframes.count > maxKeyframes {
+            keyframes.removeFirst(keyframes.count - maxKeyframes)
+        }
+        let meshCount = chunks.count
+        let frameCount = keyframes.count
+        stateLock.unlock()
+
+        emitStats(meshCount: meshCount, frameCount: frameCount)
+    }
+
+    private func emitStats(meshCount: Int, frameCount: Int) {
+        let now = CACurrentMediaTime()
+        if now - lastStatsEmit < 0.25 { return }
+        lastStatsEmit = now
+        DispatchQueue.main.async { [weak self] in
+            self?.onStats?(meshCount, frameCount)
+        }
+    }
+
+    /// Deep-copy mesh buffers while the anchor is valid (during this callback only).
+    private static func copyChunk(from anchor: ARMeshAnchor) -> CapturedMeshChunk? {
+        let geom = anchor.geometry
+        let vSource = geom.vertices
+        let nSource = geom.normals
+        let faces = geom.faces
+        let vCount = vSource.count
+        guard vCount > 0, faces.count > 0 else { return nil }
+
+        // Cap per-chunk vertices to avoid memory spikes
+        guard vCount < 80_000 else { return nil }
+
+        var positions = [SIMD3<Float>](repeating: .zero, count: vCount)
+        var normals = [SIMD3<Float>](repeating: .zero, count: vCount)
+        for i in 0..<vCount {
+            let vp = vSource.buffer.contents().advanced(by: vSource.offset + vSource.stride * i)
+            positions[i] = vp.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            if nSource.count == vCount {
+                let np = nSource.buffer.contents().advanced(by: nSource.offset + nSource.stride * i)
+                normals[i] = np.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            }
+        }
+
         var indices = [UInt32]()
-        let faces = mesh.faces
+        indices.reserveCapacity(faces.count * faces.indexCountPerPrimitive)
         for f in 0..<faces.count {
             for c in 0..<faces.indexCountPerPrimitive {
                 let off = (f * faces.indexCountPerPrimitive + c) * faces.bytesPerIndex
@@ -649,90 +697,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 }
             }
         }
-        let iData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
-        let element = SCNGeometryElement(
-            data: iData, primitiveType: .triangles,
-            primitiveCount: faces.count, bytesPerIndex: MemoryLayout<UInt32>.size
+
+        return CapturedMeshChunk(
+            id: anchor.identifier,
+            transform: anchor.transform,
+            positions: positions,
+            normals: normals,
+            indices: indices
         )
-        let geom = SCNGeometry(sources: [source], elements: [element])
-        let mat = SCNMaterial()
-        mat.fillMode = .lines
-        mat.diffuse.contents = UIColor(red: 0.3, green: 0.75, blue: 1.0, alpha: 0.9)
-        mat.isDoubleSided = true
-        mat.lightingModel = .constant
-        geom.materials = [mat]
-        return geom
-    }
-
-    // MARK: Color keyframes
-
-    func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard isRunning else { return }
-        let t = frame.timestamp
-        if t - lastKeyframeTime < 0.25 { return }
-        lastKeyframeTime = t
-
-        guard let copied = Self.copyPixelBuffer(frame.capturedImage) else { return }
-
-        // UIKit orientation must be read on main — use portrait default if off-main
-        let orientation: UIInterfaceOrientation
-        if Thread.isMainThread {
-            orientation = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first?.interfaceOrientation ?? .portrait
-        } else {
-            orientation = .portrait
-        }
-
-        let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
-        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
-
-        // ARCamera is a struct snapshot — safe to store
-        let kf = PhotoTexturedMeshBuilder.Keyframe(
-            camera: frame.camera,
-            image: copied,
-            orientation: orientation,
-            viewport: viewport,
-            displayTransform: display,
-            capturedAt: t
-        )
-
-        stateLock.lock()
-        keyframes.append(kf)
-        if keyframes.count > maxKeyframes {
-            let overflow = keyframes.count - maxKeyframes
-            keyframes.removeFirst(overflow)
-        }
-        let meshCount = meshAnchors.count
-        let frameCount = keyframes.count
-        stateLock.unlock()
-
-        emitStats(meshCount: meshCount, frameCount: frameCount)
-    }
-
-    func session(_ session: ARSession, didFailWithError error: Error) {
-        DispatchQueue.main.async { [weak self] in
-            self?.onError?(error.localizedDescription)
-        }
-    }
-
-    private func emitStatsThrottled() {
-        let now = CACurrentMediaTime()
-        if now - lastStatsEmit < 0.2 { return }
-        lastStatsEmit = now
-
-        stateLock.lock()
-        let meshCount = meshAnchors.count
-        let frameCount = keyframes.count
-        stateLock.unlock()
-        emitStats(meshCount: meshCount, frameCount: frameCount)
-    }
-
-    private func emitStats(meshCount: Int, frameCount: Int) {
-        // Always hop to main — avoids UI races / bad callbacks
-        DispatchQueue.main.async { [weak self] in
-            self?.onStats?(meshCount, frameCount)
-        }
     }
 
     private static func copyPixelBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
