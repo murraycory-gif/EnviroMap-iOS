@@ -1,7 +1,6 @@
 import SwiftUI
 import RoomPlan
 
-/// Full-screen LiDAR RoomPlan capture → process → save to library.
 struct ScanFlowView: View {
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
@@ -24,11 +23,19 @@ struct ScanFlowView: View {
                 }
 
                 if model.phase == .scanning || model.phase == .processing {
-                    VStack {
+                    VStack(spacing: 8) {
                         liveStatsBar
-                            .padding(.top, 8)
+                        if !model.trackingLabel.isEmpty {
+                            Text(model.trackingLabel)
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(Color.black.opacity(0.45)))
+                        }
                         Spacer()
                     }
+                    .padding(.top, 8)
                 }
 
                 VStack(spacing: 0) {
@@ -51,7 +58,8 @@ struct ScanFlowView: View {
             .onAppear {
                 model.refreshSupport()
                 if model.isSupported, model.phase == .idle {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    // Longer delay so representable is on screen with non-zero size
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                         model.start()
                     }
                 }
@@ -63,15 +71,11 @@ struct ScanFlowView: View {
             }
             .onChange(of: model.phase) { newPhase in
                 if newPhase == .completed {
-                    if name.isEmpty {
-                        name = defaultScanName()
-                    }
+                    if name.isEmpty { name = defaultScanName() }
                     showSaveSheet = true
                 }
             }
-            .sheet(isPresented: $showSaveSheet) {
-                saveSheet
-            }
+            .sheet(isPresented: $showSaveSheet) { saveSheet }
             .alert("Save failed", isPresented: Binding(
                 get: { saveError != nil },
                 set: { if !$0 { saveError = nil } }
@@ -132,24 +136,20 @@ struct ScanFlowView: View {
             if !model.tipText.isEmpty {
                 Text(model.tipText)
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(.white.opacity(0.9))
                     .multilineTextAlignment(.leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                    .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
             }
 
             Group {
                 switch model.phase {
                 case .scanning:
-                    Button {
-                        model.stop()
-                    } label: {
+                    Button { model.stop() } label: {
                         Label("Done scanning", systemImage: "checkmark.circle.fill")
                             .font(.headline.weight(.bold))
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(Color(red: 0.25, green: 0.85, blue: 0.55))
@@ -171,11 +171,10 @@ struct ScanFlowView: View {
                     VStack(spacing: 12) {
                         Text(message)
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.9))
-                            .multilineTextAlignment(.center)
+                            .foregroundStyle(.white)
                         Button {
                             model.reset()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
                                 model.start()
                             }
                         } label: {
@@ -188,9 +187,7 @@ struct ScanFlowView: View {
                     }
 
                 case .completed:
-                    Button {
-                        showSaveSheet = true
-                    } label: {
+                    Button { showSaveSheet = true } label: {
                         Label("Save room", systemImage: "square.and.arrow.down.fill")
                             .font(.headline.weight(.bold))
                             .frame(maxWidth: .infinity)
@@ -200,9 +197,7 @@ struct ScanFlowView: View {
                     .controlSize(.large)
 
                 case .idle:
-                    Button {
-                        model.start()
-                    } label: {
+                    Button { model.start() } label: {
                         Label("Start LiDAR scan", systemImage: "camera.viewfinder")
                             .frame(maxWidth: .infinity)
                     }
@@ -216,12 +211,8 @@ struct ScanFlowView: View {
         .padding(.bottom, 24)
         .padding(.top, 12)
         .background(
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.8)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
         )
     }
 
@@ -229,21 +220,16 @@ struct ScanFlowView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Name", text: $name, prompt: Text("Garage, living room…"))
-                    TextField("Notes", text: $notes, prompt: Text("Optional"), axis: .vertical)
-                        .lineLimit(2...5)
+                    TextField("Name", text: $name)
+                    TextField("Notes", text: $notes, axis: .vertical).lineLimit(2...5)
                 } header: {
                     Text("Save this environment")
-                } footer: {
-                    Text("Stored on this iPhone as USDZ. Reopen for 3D, floor plan, planner, or Walk AR.")
                 }
-
                 if let room = model.finalRoom {
                     Section("LiDAR structure") {
                         LabeledContent("Walls", value: "\(room.walls.count)")
                         LabeledContent("Doors", value: "\(room.doors.count)")
                         LabeledContent("Windows", value: "\(room.windows.count)")
-                        LabeledContent("Openings", value: "\(room.openings.count)")
                         LabeledContent("Objects", value: "\(room.objects.count)")
                     }
                 }
@@ -272,33 +258,21 @@ struct ScanFlowView: View {
     private var unsupportedView: some View {
         ZStack {
             AppTheme.bg.ignoresSafeArea()
-            VStack(spacing: 20) {
-                Image(systemName: "camera.viewfinder")
-                    .font(.system(size: 56))
-                    .foregroundStyle(AppTheme.blue)
-                Text("LiDAR required")
-                    .font(.title2.weight(.bold))
-                Text("Real scanning needs a Pro iPhone with LiDAR.")
-                    .font(.subheadline)
-                    .foregroundStyle(AppTheme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
-                Button("Close") { dismiss() }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .padding(.horizontal, 40)
+            VStack(spacing: 16) {
+                Text("LiDAR required").font(.title2.weight(.bold))
+                Button("Close") { dismiss() }.buttonStyle(PrimaryButtonStyle()).padding(.horizontal, 40)
             }
         }
     }
 
     private func save() {
         guard let room = model.finalRoom else { return }
-        let thumb = model.viewController.snapshotThumbnail()
         do {
             _ = try store.saveCapturedRoom(
                 room,
                 name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                 notes: notes,
-                previewImage: thumb
+                previewImage: model.viewController.snapshotThumbnail()
             )
             didSave = true
             showSaveSheet = false
