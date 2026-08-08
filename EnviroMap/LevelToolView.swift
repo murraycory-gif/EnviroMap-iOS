@@ -361,8 +361,8 @@ final class LevelMotion: ObservableObject {
     @Published var offsetX: CGFloat = 0
     @Published var offsetY: CGFloat = 0
     @Published var isLevel = false
-    @Published var hint: String = "Center the bubble"
-    @Published var instruction: String = "Lay flat, stand upright, or tilt on its side."
+    @Published var hint: String = "Center The Bubble"
+    @Published var instruction: String = "Lay Flat, Stand Upright, Or Tilt On Its Side."
     @Published var modeTitle: String = "Surface level"
 
     private let manager = CMMotionManager()
@@ -373,7 +373,7 @@ final class LevelMotion: ObservableObject {
 
     func start() {
         guard manager.isDeviceMotionAvailable else {
-            hint = "Motion unavailable"
+            hint = "Motion Unavailable"
             return
         }
         manager.deviceMotionUpdateInterval = 1.0 / 45.0
