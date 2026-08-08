@@ -51,7 +51,7 @@ struct ScanFlowView: View {
             .onAppear {
                 model.refreshSupport()
                 if model.isSupported, model.phase == .idle {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                         model.start()
                     }
                 }
@@ -129,6 +129,17 @@ struct ScanFlowView: View {
                 .frame(maxWidth: .infinity)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
+            if !model.tipText.isEmpty {
+                Text(model.tipText)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+            }
+
             Group {
                 switch model.phase {
                 case .scanning:
@@ -147,8 +158,7 @@ struct ScanFlowView: View {
 
                 case .processing:
                     HStack(spacing: 12) {
-                        ProgressView()
-                            .tint(.white)
+                        ProgressView().tint(.white)
                         Text("Building LiDAR mesh…")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
@@ -160,12 +170,12 @@ struct ScanFlowView: View {
                 case .failed(let message):
                     VStack(spacing: 12) {
                         Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.85))
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.9))
                             .multilineTextAlignment(.center)
                         Button {
                             model.reset()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                                 model.start()
                             }
                         } label: {
@@ -207,7 +217,7 @@ struct ScanFlowView: View {
         .padding(.top, 12)
         .background(
             LinearGradient(
-                colors: [.clear, .black.opacity(0.75)],
+                colors: [.clear, .black.opacity(0.8)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -219,13 +229,13 @@ struct ScanFlowView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Name", text: $name, prompt: Text("Living room, kitchen…"))
+                    TextField("Name", text: $name, prompt: Text("Garage, living room…"))
                     TextField("Notes", text: $notes, prompt: Text("Optional"), axis: .vertical)
                         .lineLimit(2...5)
                 } header: {
                     Text("Save this environment")
                 } footer: {
-                    Text("Mesh is stored on this iPhone as USDZ. Reopen anytime for 3D, floor plan, planner, or Walk AR.")
+                    Text("Stored on this iPhone as USDZ. Reopen for 3D, floor plan, planner, or Walk AR.")
                 }
 
                 if let room = model.finalRoom {
@@ -268,7 +278,7 @@ struct ScanFlowView: View {
                     .foregroundStyle(AppTheme.blue)
                 Text("LiDAR required")
                     .font(.title2.weight(.bold))
-                Text("Real RoomPlan scanning needs an iPhone or iPad with a LiDAR scanner (Pro models). The Simulator cannot capture rooms.")
+                Text("Real scanning needs a Pro iPhone with LiDAR.")
                     .font(.subheadline)
                     .foregroundStyle(AppTheme.textSecondary)
                     .multilineTextAlignment(.center)

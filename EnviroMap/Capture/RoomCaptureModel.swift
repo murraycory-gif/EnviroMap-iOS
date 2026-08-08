@@ -4,9 +4,8 @@ import UIKit
 import Combine
 import ARKit
 
-// MARK: - SwiftUI-facing model (no NSObject)
+// MARK: - SwiftUI-facing model
 
-/// Owns scan state for SwiftUI. Real LiDAR work runs in `RoomCaptureHostController`.
 final class RoomCaptureModel: ObservableObject {
     enum Phase: Equatable {
         case idle
@@ -24,9 +23,12 @@ final class RoomCaptureModel: ObservableObject {
     @Published private(set) var liveDoors: Int = 0
     @Published private(set) var liveWindows: Int = 0
     @Published private(set) var liveObjects: Int = 0
-    @Published private(set) var isPaused: Bool = false
+    @Published private(set) var tipText: String = ""
 
     let viewController = RoomCaptureHostController()
+
+    /// User intentionally stopped / cancelled — ignore trailing session errors.
+    private var ignoreSessionErrors = false
 
     init() {
         viewController.model = self
@@ -38,7 +40,8 @@ final class RoomCaptureModel: ObservableObject {
         if !isSupported {
             instruction = "This device has no LiDAR — RoomPlan needs a Pro iPhone/iPad with LiDAR."
         } else if phase == .idle {
-            instruction = "Ready — walk slowly around the room"
+            instruction = "Bright light · move slowly · face walls"
+            tipText = "Tip: Point at a clear wall first, then walk the edges."
         }
     }
 
@@ -46,45 +49,47 @@ final class RoomCaptureModel: ObservableObject {
         refreshSupport()
         guard isSupported else {
             phase = .failed(
-                "RoomPlan needs a LiDAR iPhone or iPad (Pro models). The Simulator cannot scan real rooms."
+                "RoomPlan needs a LiDAR Pro iPhone. Simulator cannot scan."
             )
             return
         }
+        ignoreSessionErrors = false
         finalRoom = nil
-        liveWalls = 0
-        liveDoors = 0
-        liveWindows = 0
-        liveObjects = 0
-        isPaused = false
+        clearLiveStats()
         phase = .scanning
-        instruction = "Point at a wall, then walk the room edges slowly"
-        viewController.startSession()
+        instruction = "Find a wall — hold still 2 seconds, then walk slowly"
+        tipText = "Good light helps. Avoid pure white empty walls only."
+        viewController.startSession(resetHard: true)
     }
 
     func stop() {
         guard phase == .scanning else { return }
+        ignoreSessionErrors = true
         phase = .processing
-        instruction = "Building LiDAR mesh and structure…"
-        isPaused = false
-        viewController.stopSession(process: true)
+        instruction = "Building LiDAR mesh…"
+        tipText = ""
+        viewController.stopSession()
     }
 
     func cancel() {
-        viewController.stopSession(process: false)
+        ignoreSessionErrors = true
+        viewController.stopSession()
         phase = .idle
         finalRoom = nil
-        isPaused = false
         instruction = "Cancelled"
+        tipText = ""
         clearLiveStats()
     }
 
     func reset() {
-        viewController.stopSession(process: false)
+        ignoreSessionErrors = true
+        viewController.stopSession()
+        viewController.tearDownCaptureView()
         finalRoom = nil
         phase = .idle
-        isPaused = false
         clearLiveStats()
-        instruction = isSupported ? "Ready — walk slowly around the room" : instruction
+        instruction = isSupported ? "Ready — good light, move slowly" : instruction
+        tipText = "Tip: Start facing a wall with shelves, doors, or corners."
     }
 
     private func clearLiveStats() {
@@ -124,13 +129,16 @@ final class RoomCaptureModel: ObservableObject {
         onMain { [weak self] in
             guard let self else { return }
             if let error {
-                self.phase = .failed(error.localizedDescription)
-                self.instruction = "Could not finish processing"
+                // If user already stopped for processing, still try to surface real process errors
+                self.phase = .failed(Self.friendlyError(error))
+                self.instruction = "Could not finish"
+                self.tipText = Self.recoveryTip(for: error)
                 return
             }
             guard let room else {
-                self.phase = .failed("No room data returned from LiDAR.")
-                self.instruction = "Try scanning again — cover every wall"
+                self.phase = .failed("No room data returned.")
+                self.instruction = "Scan longer — cover every wall"
+                self.tipText = "Walk a full loop of the room before tapping Done."
                 return
             }
             self.finalRoom = room
@@ -140,7 +148,54 @@ final class RoomCaptureModel: ObservableObject {
             self.liveObjects = room.objects.count
             self.phase = .completed
             self.instruction = "Scan complete — save to reopen later"
+            self.tipText = ""
         }
+    }
+
+    func handleSessionEnd(error: Error?) {
+        onMain { [weak self] in
+            guard let self else { return }
+            // User stopped / cancelled — don't flash world-tracking noise
+            if self.ignoreSessionErrors {
+                return
+            }
+            // Already completed or processing successfully
+            if self.phase == .completed || self.phase == .processing {
+                return
+            }
+            guard let error else { return }
+            self.phase = .failed(Self.friendlyError(error))
+            self.instruction = "Session ended with error"
+            self.tipText = Self.recoveryTip(for: error)
+        }
+    }
+
+    /// Map ARKit/RoomPlan errors to plain language.
+    static func friendlyError(_ error: Error) -> String {
+        let ns = error as NSError
+        let text = error.localizedDescription.lowercased()
+        if text.contains("world tracking") || ns.code == 102 /* worldTrackingFailed often */ {
+            return "World tracking lost"
+        }
+        if text.contains("sensor") || text.contains("camera") {
+            return "Camera / sensor issue"
+        }
+        return error.localizedDescription
+    }
+
+    static func recoveryTip(for error: Error) -> String {
+        let text = error.localizedDescription.lowercased()
+        if text.contains("world tracking") {
+            return """
+            Try this:
+            • Turn on more lights
+            • Hold phone steady 2–3 sec on a wall
+            • Move slowly (no quick spins)
+            • Point at corners, doors, shelves — not blank walls only
+            • Close other AR apps, then Try again
+            """
+        }
+        return "Tap Try again. Use bright light and move slowly along the walls."
     }
 
     private func onMain(_ block: @escaping () -> Void) {
@@ -152,7 +207,7 @@ final class RoomCaptureModel: ObservableObject {
     }
 }
 
-// MARK: - Host UIViewController (RoomPlan + ARKit)
+// MARK: - Host UIViewController
 
 final class RoomCaptureHostController: UIViewController {
     weak var model: RoomCaptureModel?
@@ -182,11 +237,17 @@ final class RoomCaptureHostController: UIViewController {
         capture.captureSession.delegate = self
     }
 
-    func startSession() {
+    /// Hard reset recreates RoomCaptureView so ARKit gets a clean world map.
+    func startSession(resetHard: Bool = false) {
         loadViewIfNeeded()
+
+        if resetHard {
+            tearDownCaptureView()
+        }
+
         installCaptureViewIfNeeded()
         guard let roomCaptureView else {
-            model?.setPhase(.failed("Could not create RoomCaptureView."), instruction: "Restart the app and try again")
+            model?.setPhase(.failed("Could not start camera."), instruction: "Restart the app")
             return
         }
 
@@ -195,16 +256,36 @@ final class RoomCaptureHostController: UIViewController {
             isRunning = false
         }
 
-        let configuration = RoomCaptureSession.Configuration()
-        isRunning = true
-        roomCaptureView.captureSession.run(configuration: configuration)
+        // Brief delay after teardown so ARSession can release the camera
+        let runBlock = { [weak self] in
+            guard let self, let roomCaptureView = self.roomCaptureView else { return }
+            let configuration = RoomCaptureSession.Configuration()
+            self.isRunning = true
+            roomCaptureView.captureSession.run(configuration: configuration)
+        }
+
+        if resetHard {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: runBlock)
+        } else {
+            runBlock()
+        }
     }
 
-    func stopSession(process: Bool) {
+    func stopSession() {
         guard let roomCaptureView else { return }
-        guard isRunning || process else { return }
-        roomCaptureView.captureSession.stop()
-        isRunning = false
+        if isRunning {
+            roomCaptureView.captureSession.stop()
+            isRunning = false
+        }
+    }
+
+    func tearDownCaptureView() {
+        if isRunning {
+            roomCaptureView?.captureSession.stop()
+            isRunning = false
+        }
+        roomCaptureView?.removeFromSuperview()
+        roomCaptureView = nil
     }
 
     func snapshotThumbnail() -> UIImage? {
@@ -225,7 +306,7 @@ extension RoomCaptureHostController: RoomCaptureViewDelegate {
         error: Error?
     ) -> Bool {
         if let error {
-            model?.setPhase(.failed(error.localizedDescription), instruction: "Capture error")
+            model?.setResult(room: nil, error: error)
             return false
         }
         model?.setPhase(.processing, instruction: "Processing walls, doors, and objects…")
@@ -282,7 +363,7 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
         _ session: RoomCaptureSession,
         didStartWith configuration: RoomCaptureSession.Configuration
     ) {
-        model?.setPhase(.scanning, instruction: "LiDAR active — scan every wall and corner")
+        model?.setPhase(.scanning, instruction: "Hold still on a wall, then walk slowly")
     }
 
     func captureSession(
@@ -290,12 +371,9 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
         didEndWith data: CapturedRoomData,
         error: Error?
     ) {
-        if let error {
-            model?.setPhase(.failed(error.localizedDescription), instruction: "Session ended with error")
-        }
+        model?.handleSessionEnd(error: error)
     }
 
-    /// Safe across SDK versions: known cases + plain `default` (always exhaustive).
     private static func humanReadable(_ instruction: RoomCaptureSession.Instruction) -> String {
         switch instruction {
         case .moveCloseToWall:
@@ -303,14 +381,13 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
         case .moveAwayFromWall:
             return "Step back from the wall"
         case .slowDown:
-            return "Slow down — move more slowly"
+            return "Slow down"
         case .lowTexture:
-            return "Low texture — point at corners, frames, or furniture edges"
+            return "Need more detail — aim at corners, doors, shelves"
         case .normal:
-            return "Looking good — keep scanning the remaining walls"
+            return "Tracking OK — keep scanning walls"
         default:
-            // Covers turnLeft / turnRight / any future coaching cases without compile errors
-            return "Keep scanning — cover walls, doors, and windows"
+            return "Move slowly along the walls"
         }
     }
 }
