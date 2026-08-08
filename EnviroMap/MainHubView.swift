@@ -33,6 +33,7 @@ struct ToolsHomeView: View {
     @EnvironmentObject private var store: SessionStore
     @State private var showScanner = false
     @State private var path = NavigationPath()
+    @State private var chipAlert: String?
 
     private let tools: [ToolItem] = [
         .init(id: .roomPlan, title: "Room Plan", subtitle: "Planner + LiDAR", icon: "square.split.bottomrightquarter.fill", color: AppTheme.blue),
@@ -112,10 +113,28 @@ struct ToolsHomeView: View {
                         }
                         .buttonStyle(.plain)
 
+                        // Action chips (wired)
                         HStack(spacing: 10) {
-                            highlightChip(icon: "wave.3.right", title: "LiDAR")
-                            highlightChip(icon: "cube", title: "3D Mesh")
-                            highlightChip(icon: "figure.walk", title: "Walk AR")
+                            Button {
+                                showScanner = true
+                            } label: {
+                                highlightChip(icon: "wave.3.right", title: "LiDAR")
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                openLatestMesh()
+                            } label: {
+                                highlightChip(icon: "cube", title: "3D Mesh")
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                openLatestWalkAR()
+                            } label: {
+                                highlightChip(icon: "figure.walk", title: "Walk AR")
+                            }
+                            .buttonStyle(.plain)
                         }
 
                         Text("Advanced tools")
@@ -190,6 +209,20 @@ struct ToolsHomeView: View {
                     } else {
                         RoomPlannerView(session: nil)
                     }
+                case .mesh(let id):
+                    if let s = store.sessions.first(where: { $0.id == id }) {
+                        RoomViewerView(session: s)
+                    } else {
+                        needScanPlaceholder(title: "3D Mesh", message: "Scan a room first, then open its 3D mesh here.")
+                    }
+                case .walkAR(let id):
+                    if let s = store.sessions.first(where: { $0.id == id }) {
+                        ARWalkView(usdzURL: store.usdzURL(for: s))
+                    } else {
+                        needScanPlaceholder(title: "Walk AR", message: "Scan a room first, then walk through it in AR.")
+                    }
+                case .pickSession(let purpose):
+                    SessionPickerView(purpose: purpose)
                 }
             }
             .fullScreenCover(isPresented: $showScanner) {
@@ -199,7 +232,40 @@ struct ToolsHomeView: View {
             .onChange(of: showScanner) { open in
                 if !open { store.loadIndex() }
             }
+            .alert("Scan a room first", isPresented: Binding(
+                get: { chipAlert != nil },
+                set: { if !$0 { chipAlert = nil } }
+            )) {
+                Button("Scan now") { showScanner = true }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(chipAlert ?? "")
+            }
         }
+    }
+
+    private func needScanPlaceholder(title: String, message: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "cube.transparent")
+                .font(.system(size: 48))
+                .foregroundStyle(AppTheme.blue)
+            Text(title)
+                .font(.title2.weight(.bold))
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(AppTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Button("Scan environment") {
+                showScanner = true
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .padding(.horizontal, 40)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppTheme.bg)
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var background: some View {
@@ -241,6 +307,33 @@ struct ToolsHomeView: View {
                         .stroke(AppTheme.cardBorder, lineWidth: 1)
                 )
         )
+        .contentShape(Rectangle())
+    }
+
+    private func openLatestMesh() {
+        store.loadIndex()
+        if store.sessions.isEmpty {
+            chipAlert = "Scan a room with LiDAR first. Then 3D Mesh opens that capture."
+            return
+        }
+        if store.sessions.count == 1, let s = store.sessions.first {
+            path.append(ToolRoute.mesh(s.id))
+        } else {
+            path.append(ToolRoute.pickSession(.mesh))
+        }
+    }
+
+    private func openLatestWalkAR() {
+        store.loadIndex()
+        if store.sessions.isEmpty {
+            chipAlert = "Scan a room with LiDAR first. Then Walk AR lets you walk that mesh."
+            return
+        }
+        if store.sessions.count == 1, let s = store.sessions.first {
+            path.append(ToolRoute.walkAR(s.id))
+        } else {
+            path.append(ToolRoute.pickSession(.walkAR))
+        }
     }
 
     private func handle(_ id: ToolID) {
@@ -257,6 +350,70 @@ struct ToolsHomeView: View {
             path.append(ToolRoute.image3d)
         case .text3d:
             path.append(ToolRoute.text3d)
+        }
+    }
+}
+
+// MARK: - Pick a saved scan for Mesh / Walk AR
+
+enum SessionPickPurpose: String, Hashable {
+    case mesh
+    case walkAR
+
+    var title: String {
+        switch self {
+        case .mesh: return "Open 3D mesh"
+        case .walkAR: return "Walk in AR"
+        }
+    }
+}
+
+struct SessionPickerView: View {
+    @EnvironmentObject private var store: SessionStore
+    let purpose: SessionPickPurpose
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(store.sessions) { session in
+                    NavigationLink {
+                        destination(for: session)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(session.name)
+                                .font(.headline)
+                            Text("\(session.wallCount) walls · \(session.objectCount) objects")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("Choose a saved room")
+            } footer: {
+                Text("These are LiDAR scans saved on this iPhone.")
+            }
+        }
+        .navigationTitle(purpose.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay {
+            if store.sessions.isEmpty {
+                ContentUnavailableView(
+                    "No scans yet",
+                    systemImage: "cube.transparent",
+                    description: Text("Use Scan environment or the LiDAR chip first.")
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func destination(for session: RoomSession) -> some View {
+        switch purpose {
+        case .mesh:
+            RoomViewerView(session: session)
+        case .walkAR:
+            ARWalkView(usdzURL: store.usdzURL(for: session))
         }
     }
 }
@@ -279,6 +436,9 @@ enum ToolRoute: Hashable {
     case plannerSession(UUID)
     case ruler, level, area, image3d, text3d
     case floorPlan(UUID)
+    case mesh(UUID)
+    case walkAR(UUID)
+    case pickSession(SessionPickPurpose)
 }
 
 private struct ToolCard: View {
