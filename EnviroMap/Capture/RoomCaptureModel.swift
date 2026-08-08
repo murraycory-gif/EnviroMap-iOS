@@ -20,14 +20,12 @@ final class RoomCaptureModel: ObservableObject {
     @Published var finalRoom: CapturedRoom?
     @Published private(set) var isSupported: Bool = RoomCaptureSession.isSupported
     @Published private(set) var instruction: String = "Preparing…"
-    /// Live counts while scanning (from intermediate CapturedRoom updates).
     @Published private(set) var liveWalls: Int = 0
     @Published private(set) var liveDoors: Int = 0
     @Published private(set) var liveWindows: Int = 0
     @Published private(set) var liveObjects: Int = 0
     @Published private(set) var isPaused: Bool = false
 
-    /// Host that owns RoomCaptureView (Apple’s recommended pattern).
     let viewController = RoomCaptureHostController()
 
     init() {
@@ -63,7 +61,6 @@ final class RoomCaptureModel: ObservableObject {
         viewController.startSession()
     }
 
-    /// User finished walking — stop capture and process mesh.
     func stop() {
         guard phase == .scanning else { return }
         phase = .processing
@@ -97,8 +94,6 @@ final class RoomCaptureModel: ObservableObject {
         liveObjects = 0
     }
 
-    // MARK: Updates from host (always hop to main)
-
     func setPhase(_ newPhase: Phase, instruction newInstruction: String? = nil) {
         onMain { [weak self] in
             guard let self else { return }
@@ -112,15 +107,6 @@ final class RoomCaptureModel: ObservableObject {
     func setInstruction(_ text: String) {
         onMain { [weak self] in
             self?.instruction = text
-        }
-    }
-
-    func setPaused(_ paused: Bool) {
-        onMain { [weak self] in
-            self?.isPaused = paused
-            if paused {
-                self?.instruction = "Tracking limited — move slower or add light"
-            }
         }
     }
 
@@ -168,7 +154,6 @@ final class RoomCaptureModel: ObservableObject {
 
 // MARK: - Host UIViewController (RoomPlan + ARKit)
 
-/// Apple pattern: UIViewController hosts `RoomCaptureView`, implements delegates.
 final class RoomCaptureHostController: UIViewController {
     weak var model: RoomCaptureModel?
 
@@ -194,8 +179,6 @@ final class RoomCaptureHostController: UIViewController {
         capture.delegate = self
         view.addSubview(capture)
         roomCaptureView = capture
-
-        // Live coaching + intermediate room structure
         capture.captureSession.delegate = self
     }
 
@@ -217,19 +200,13 @@ final class RoomCaptureHostController: UIViewController {
         roomCaptureView.captureSession.run(configuration: configuration)
     }
 
-    /// - Parameter process: if true, RoomPlan builds final CapturedRoom; if false, abandon.
     func stopSession(process: Bool) {
         guard let roomCaptureView else { return }
-        guard isRunning || process else {
-            // Already stopped
-            return
-        }
-        // Ends capture; when process path is active, final CapturedRoom arrives via view delegate
+        guard isRunning || process else { return }
         roomCaptureView.captureSession.stop()
         isRunning = false
     }
 
-    /// Snapshot of the current AR view for library thumbnail (best-effort).
     func snapshotThumbnail() -> UIImage? {
         guard let roomCaptureView else { return nil }
         let bounds = roomCaptureView.bounds
@@ -240,7 +217,7 @@ final class RoomCaptureHostController: UIViewController {
     }
 }
 
-// MARK: RoomCaptureViewDelegate — final mesh / structure
+// MARK: RoomCaptureViewDelegate
 
 extension RoomCaptureHostController: RoomCaptureViewDelegate {
     func captureView(
@@ -251,7 +228,6 @@ extension RoomCaptureHostController: RoomCaptureViewDelegate {
             model?.setPhase(.failed(error.localizedDescription), instruction: "Capture error")
             return false
         }
-        // Returning true lets RoomPlan process LiDAR + structure into CapturedRoom
         model?.setPhase(.processing, instruction: "Processing walls, doors, and objects…")
         return true
     }
@@ -264,7 +240,7 @@ extension RoomCaptureHostController: RoomCaptureViewDelegate {
     }
 }
 
-// MARK: RoomCaptureSessionDelegate — live coaching + intermediate structure
+// MARK: RoomCaptureSessionDelegate
 
 extension RoomCaptureHostController: RoomCaptureSessionDelegate {
     func captureSession(
@@ -317,11 +293,12 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
         if let error {
             model?.setPhase(.failed(error.localizedDescription), instruction: "Session ended with error")
         }
-        // Success still finishes via captureView(didPresent:error:) after processing
     }
 
-    /// Map Apple coaching enums to short user-facing lines.
+    /// Only cases that exist on all RoomPlan SDK versions we target.
     private static func humanReadable(_ instruction: RoomCaptureSession.Instruction) -> String {
+        // Official cases: normal, moveCloseToWall, moveAwayFromWall, slowDown, lowTexture
+        // (turnLeft / turnRight are NOT available on all SDKs — do not reference them)
         switch instruction {
         case .moveCloseToWall:
             return "Move closer to the wall"
@@ -329,15 +306,12 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
             return "Step back from the wall"
         case .slowDown:
             return "Slow down — move more slowly"
-        case .turnLeft:
-            return "Turn left to continue mapping"
-        case .turnRight:
-            return "Turn right to continue mapping"
         case .lowTexture:
             return "Low texture — point at corners, frames, or furniture edges"
         case .normal:
             return "Looking good — keep scanning the remaining walls"
         @unknown default:
+            // Covers any newer coaching cases (e.g. turn hints on future OS)
             return "Keep scanning — cover walls, doors, and windows"
         }
     }
