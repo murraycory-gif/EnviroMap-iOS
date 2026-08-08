@@ -115,55 +115,70 @@ struct LevelToolView: View {
     // MARK: - Landscape chrome
 
     private func landscapeChrome(size: CGSize, safe: EdgeInsets) -> some View {
-        ZStack {
-            // Hint / status — top center
+        // Keep left metrics in upper band so they never cover bottom tip
+        let tipBand: CGFloat = 56
+        let topInset = max(safe.top, 8) + 8
+        let bottomInset = max(safe.bottom, 8) + tipBand
+
+        return ZStack {
+            // Top center: Align On Its Side / Level
             VStack {
                 Text(motion.isLevel ? "Level" : motion.hint)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(motion.isLevel ? levelColor : .white.opacity(0.85))
                     .multilineTextAlignment(.center)
-                    .padding(.top, max(safe.top, 10) + 10)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.top, topInset)
                 Spacer()
             }
 
-            // Left data — raised toward top so clear of bottom tip
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(String(format: "%.0f°", motion.primaryDeg))
-                        .font(.system(size: 72, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(levelColor)
-                        .contentTransition(.numericText())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+            // Left: degree + cards — top-aligned, capped above tip
+            VStack {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(String(format: "%.0f°", motion.primaryDeg))
+                            .font(.system(size: 56, weight: .bold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(levelColor)
+                            .contentTransition(.numericText())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
 
-                    VStack(spacing: 10) {
-                        metricCard(motion.axisAName, motion.axisADeg)
-                        metricCard(motion.axisBName, motion.axisBDeg)
+                        VStack(spacing: 8) {
+                            metricCard(motion.axisAName, motion.axisADeg)
+                            metricCard(motion.axisBName, motion.axisBDeg)
+                        }
+                        .frame(width: 180)
                     }
-                    .frame(maxWidth: 200)
+                    .padding(.leading, max(safe.leading, 16) + 56)
+                    .padding(.top, topInset + 34)
+
+                    Spacer(minLength: 0)
                 }
-                .padding(.leading, max(safe.leading, 20) + 64)
-                .padding(.top, max(safe.top, 10) + 48) // under top status, not mid-screen
-                Spacer()
+                Spacer(minLength: bottomInset)
             }
 
-            // Mode chips — vertical on the right (vertically centered)
+            // Right chips — above tip band
             HStack {
                 Spacer()
                 modeChipsVertical
-                    .padding(.trailing, max(safe.trailing, 20) + 8)
+                    .padding(.trailing, max(safe.trailing, 16) + 8)
             }
+            .padding(.bottom, bottomInset * 0.35)
 
-            // Instruction — bottom center only
+            // Bottom tip strip only
             VStack {
                 Spacer()
                 Text(motion.instruction)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.55))
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: size.width * 0.72)
-                    .padding(.bottom, max(safe.bottom, 12) + 14)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .frame(maxWidth: size.width * 0.75)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, max(safe.bottom, 8) + 10)
             }
         }
         .frame(width: size.width, height: size.height)
@@ -228,8 +243,8 @@ struct LevelToolView: View {
                 .foregroundStyle(.white)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
