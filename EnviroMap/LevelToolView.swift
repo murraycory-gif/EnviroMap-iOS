@@ -3,82 +3,159 @@ import CoreMotion
 import UIKit
 
 /// Multi-orientation digital level — flat · upright · side.
-/// Look is EnviroMap (blue rings / HUD), not Apple Measure green-screen.
+/// Layout adapts for landscape so nothing is clipped at the top.
 struct LevelToolView: View {
     @StateObject private var motion = LevelMotion()
 
     var body: some View {
-        ZStack {
-            background.ignoresSafeArea()
+        GeometryReader { geo in
+            let isLandscape = geo.size.width > geo.size.height
+            let safeTop = geo.safeAreaInsets.top
+            let safeBottom = geo.safeAreaInsets.bottom
 
-            VStack(spacing: 0) {
-                // Mode pill
-                HStack(spacing: 8) {
-                    modeChip(.flat, icon: "rectangle.landscape.rotate")
-                    modeChip(.upright, icon: "iphone")
-                    modeChip(.side, icon: "iphone.landscape")
+            ZStack {
+                background.ignoresSafeArea()
+
+                if isLandscape {
+                    landscapeBody(size: geo.size, safeTop: safeTop, safeBottom: safeBottom)
+                } else {
+                    portraitBody(safeTop: safeTop)
                 }
-                .padding(.top, 12)
-                .padding(.bottom, 8)
-
-                Text(motion.modeTitle)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.textSecondary)
-
-                Spacer(minLength: 8)
-
-                // Primary angle
-                Text(String(format: "%.0f°", motion.primaryDeg))
-                    .font(.system(size: 72, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(motion.isLevel ? Color(red: 0.15, green: 0.85, blue: 0.55) : .white)
-                    .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
-                    .contentTransition(.numericText())
-                    .animation(.easeOut(duration: 0.12), value: motion.primaryDeg)
-
-                Text(motion.isLevel ? "LEVEL" : motion.hint)
-                    .font(.caption.weight(.bold))
-                    .tracking(1.2)
-                    .foregroundStyle(motion.isLevel ? Color(red: 0.15, green: 0.85, blue: 0.55) : .white.opacity(0.7))
-                    .padding(.top, 4)
-
-                Spacer(minLength: 12)
-
-                // HUD
-                levelHUD
-                    .frame(width: 280, height: 280)
-
-                Spacer(minLength: 16)
-
-                // Dual readouts
-                HStack(spacing: 12) {
-                    readout(title: motion.axisAName, value: motion.axisADeg)
-                    readout(title: motion.axisBName, value: motion.axisBDeg)
-                }
-                .padding(.horizontal, 20)
-
-                Text(motion.instruction)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.55))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
-                    .padding(.top, 14)
-                    .padding(.bottom, 24)
             }
         }
         .navigationTitle("Level")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
+        .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+        .toolbar(.hidden, for: .tabBar) // free space when phone is on its side
         .preferredColorScheme(.dark)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
     }
 
-    // MARK: HUD — ring + crosshair + bubble (not Apple green fill)
+    // MARK: - Portrait (full vertical stack)
 
-    private var levelHUD: some View {
-        ZStack {
-            // Outer ring
+    private func portraitBody(safeTop: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            modeChips
+                .padding(.top, 8)
+
+            Text(motion.modeTitle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(AppTheme.textSecondary)
+                .padding(.top, 6)
+
+            Spacer(minLength: 6)
+
+            primaryAngle
+            statusLine
+                .padding(.top, 4)
+
+            Spacer(minLength: 8)
+
+            levelHUD(diameter: 260)
+
+            Spacer(minLength: 12)
+
+            dualReadouts
+                .padding(.horizontal, 20)
+
+            Text(motion.instruction)
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.55))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+                .padding(.top, 12)
+                .padding(.bottom, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Landscape (sideways phone) — content fits, no top cutoff
+
+    private func landscapeBody(size: CGSize, safeTop: CGFloat, safeBottom: CGFloat) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            // Left column: modes + angle + readouts
+            VStack(spacing: 8) {
+                modeChips
+                    .scaleEffect(0.92)
+
+                Text(motion.modeTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+
+                primaryAngle
+                    .scaleEffect(0.85)
+
+                statusLine
+
+                dualReadouts
+                    .frame(maxWidth: 280)
+
+                Text(motion.instruction)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .padding(.horizontal, 4)
+            }
+            .frame(maxWidth: size.width * 0.42)
+            .padding(.leading, 8)
+
+            // Right: HUD scaled to height
+            let hudSize = min(size.height - safeTop - safeBottom - 24, size.width * 0.48, 240)
+            levelHUD(diameter: hudSize)
+                .frame(width: hudSize, height: hudSize)
+                .padding(.trailing, 12)
+        }
+        .padding(.top, max(safeTop * 0.15, 4))
+        .padding(.bottom, max(safeBottom, 8))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: Shared pieces
+
+    private var modeChips: some View {
+        HStack(spacing: 6) {
+            modeChip(.flat, icon: "rectangle.landscape.rotate")
+            modeChip(.upright, icon: "iphone")
+            modeChip(.side, icon: "iphone.landscape")
+        }
+    }
+
+    private var primaryAngle: some View {
+        Text(String(format: "%.0f°", motion.primaryDeg))
+            .font(.system(size: 64, weight: .bold, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(motion.isLevel ? Color(red: 0.15, green: 0.85, blue: 0.55) : .white)
+            .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+            .contentTransition(.numericText())
+            .animation(.easeOut(duration: 0.12), value: motion.primaryDeg)
+            .lineLimit(1)
+            .minimumScaleFactor(0.5)
+    }
+
+    private var statusLine: some View {
+        Text(motion.isLevel ? "LEVEL" : motion.hint)
+            .font(.caption.weight(.bold))
+            .tracking(1.1)
+            .foregroundStyle(motion.isLevel ? Color(red: 0.15, green: 0.85, blue: 0.55) : .white.opacity(0.7))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+    }
+
+    private var dualReadouts: some View {
+        HStack(spacing: 10) {
+            readout(title: motion.axisAName, value: motion.axisADeg)
+            readout(title: motion.axisBName, value: motion.axisBDeg)
+        }
+    }
+
+    private func levelHUD(diameter: CGFloat) -> some View {
+        let scale = diameter / 280
+        return ZStack {
             Circle()
                 .stroke(
                     LinearGradient(
@@ -89,40 +166,39 @@ struct LevelToolView: View {
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
-                    lineWidth: 3
+                    lineWidth: 3 * scale
                 )
-                .frame(width: 260, height: 260)
+                .frame(width: diameter * 0.93, height: diameter * 0.93)
 
-            // Tick marks
             ForEach(0..<12, id: \.self) { i in
                 Capsule()
                     .fill(Color.white.opacity(i % 3 == 0 ? 0.45 : 0.18))
-                    .frame(width: i % 3 == 0 ? 3 : 2, height: i % 3 == 0 ? 14 : 8)
-                    .offset(y: -118)
+                    .frame(width: (i % 3 == 0 ? 3 : 2) * scale, height: (i % 3 == 0 ? 12 : 7) * scale)
+                    .offset(y: -diameter * 0.42)
                     .rotationEffect(.degrees(Double(i) * 30))
             }
 
-            // Inner target ring
             Circle()
                 .stroke(Color.white.opacity(0.2), lineWidth: 1.5)
-                .frame(width: 88, height: 88)
+                .frame(width: diameter * 0.31, height: diameter * 0.31)
 
             // Crosshair
             Path { p in
-                p.move(to: CGPoint(x: 140 - 100, y: 140))
-                p.addLine(to: CGPoint(x: 140 + 100, y: 140))
-                p.move(to: CGPoint(x: 140, y: 140 - 100))
-                p.addLine(to: CGPoint(x: 140, y: 140 + 100))
+                let c = diameter / 2
+                let arm = diameter * 0.36
+                p.move(to: CGPoint(x: c - arm, y: c))
+                p.addLine(to: CGPoint(x: c + arm, y: c))
+                p.move(to: CGPoint(x: c, y: c - arm))
+                p.addLine(to: CGPoint(x: c, y: c + arm))
             }
             .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: 1, dash: [4, 6]))
-            .frame(width: 280, height: 280)
+            .frame(width: diameter, height: diameter)
 
-            // Center bullseye
             Circle()
                 .stroke(motion.isLevel ? Color(red: 0.15, green: 0.85, blue: 0.55) : AppTheme.blue, lineWidth: 2)
-                .frame(width: 28, height: 28)
+                .frame(width: 28 * scale, height: 28 * scale)
 
-            // Bubble (glass orb)
+            // Bubble — scale offset with HUD size
             ZStack {
                 Circle()
                     .fill(
@@ -134,34 +210,32 @@ struct LevelToolView: View {
                             ],
                             center: UnitPoint(x: 0.35, y: 0.3),
                             startRadius: 1,
-                            endRadius: 20
+                            endRadius: 18 * scale
                         )
                     )
                 Circle()
                     .fill(.white.opacity(0.45))
-                    .frame(width: 10, height: 6)
-                    .offset(x: -4, y: -6)
+                    .frame(width: 9 * scale, height: 5 * scale)
+                    .offset(x: -3 * scale, y: -5 * scale)
             }
-            .frame(width: 40, height: 40)
-            .shadow(color: AppTheme.blue.opacity(0.55), radius: 10, y: 2)
-            .offset(x: motion.offsetX, y: motion.offsetY)
+            .frame(width: 36 * scale, height: 36 * scale)
+            .shadow(color: AppTheme.blue.opacity(0.55), radius: 8, y: 2)
+            .offset(x: motion.offsetX * scale, y: motion.offsetY * scale)
             .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.82), value: motion.offsetX)
             .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.82), value: motion.offsetY)
 
-            // Level flash ring
             if motion.isLevel {
                 Circle()
-                    .stroke(Color(red: 0.15, green: 0.85, blue: 0.55).opacity(0.7), lineWidth: 4)
-                    .frame(width: 268, height: 268)
-                    .transition(.opacity)
+                    .stroke(Color(red: 0.15, green: 0.85, blue: 0.55).opacity(0.7), lineWidth: 3.5)
+                    .frame(width: diameter * 0.96, height: diameter * 0.96)
             }
         }
+        .frame(width: diameter, height: diameter)
     }
 
     private var background: some View {
         ZStack {
             Color(red: 0.04, green: 0.06, blue: 0.12)
-            // Soft blue ambient — not Apple green wash
             RadialGradient(
                 colors: [
                     motion.isLevel
@@ -188,15 +262,15 @@ struct LevelToolView: View {
 
     private func modeChip(_ mode: LevelMotion.Mode, icon: String) -> some View {
         let on = motion.mode == mode
-        return HStack(spacing: 5) {
+        return HStack(spacing: 4) {
             Image(systemName: icon)
                 .font(.caption2.weight(.bold))
             Text(mode.label)
                 .font(.caption2.weight(.bold))
         }
         .foregroundStyle(on ? .white : .white.opacity(0.45))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
         .background(
             Capsule()
                 .fill(on ? AppTheme.blue.opacity(0.85) : Color.white.opacity(0.08))
@@ -208,21 +282,26 @@ struct LevelToolView: View {
     }
 
     private func readout(title: String, value: Double) -> some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 3) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(String(format: "%+.1f°", value))
-                .font(.title3.weight(.bold).monospacedDigit())
+                .font(.body.weight(.bold).monospacedDigit())
                 .foregroundStyle(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 4)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.white.opacity(0.07))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .stroke(Color.white.opacity(0.1), lineWidth: 1)
                 )
         )
@@ -261,20 +340,14 @@ final class LevelMotion: ObservableObject {
     private let manager = CMMotionManager()
     private let maxOffset: CGFloat = 95
     private var wasLevel = false
-
-    /// Degrees from level for bubble mapping (±)
     private let mapRange: Double = 20
-    /// Snap-to-level threshold
     private let levelThreshold: Double = 1.0
-
-    var modeTitleLive: String { modeTitle }
 
     func start() {
         guard manager.isDeviceMotionAvailable else {
             hint = "Motion unavailable"
             return
         }
-        // Reference frame that follows the device screen
         manager.deviceMotionUpdateInterval = 1.0 / 45.0
         manager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] data, _ in
             guard let self, let data else { return }
@@ -287,8 +360,6 @@ final class LevelMotion: ObservableObject {
     }
 
     private func process(_ data: CMDeviceMotion) {
-        // Gravity: points toward Earth in device coords
-        // x = right, y = top of device, z = out of screen (toward user when face-up)
         let gx = data.gravity.x
         let gy = data.gravity.y
         let gz = data.gravity.z
@@ -297,7 +368,6 @@ final class LevelMotion: ObservableObject {
         let ay = abs(gy)
         let az = abs(gz)
 
-        // Dominant gravity axis → orientation mode
         let newMode: Mode
         if az >= ax && az >= ay {
             newMode = .flat
@@ -310,8 +380,6 @@ final class LevelMotion: ObservableObject {
 
         switch newMode {
         case .flat:
-            // Face-up / face-down on a table — true surface level
-            // Perfect flat: gx≈0, gy≈0, |gz|≈1
             let degX = asin(clamp(gx, -1, 1)) * 180 / .pi
             let degY = asin(clamp(gy, -1, 1)) * 180 / .pi
             axisAName = "Left–Right"
@@ -320,15 +388,13 @@ final class LevelMotion: ObservableObject {
             axisBDeg = degY
             primaryDeg = hypot(degX, degY)
             offsetX = mapToOffset(degX)
-            offsetY = mapToOffset(-degY) // match screen Y
+            offsetY = mapToOffset(-degY)
             isLevel = abs(degX) < levelThreshold && abs(degY) < levelThreshold
             hint = isLevel ? "LEVEL" : "Tilt until bubble centers"
             instruction = "Lay the phone flat on a counter, shelf, or floor."
             modeTitle = "Flat · surface"
 
         case .upright:
-            // Portrait against a wall — plumb line (vertical)
-            // Perfect upright: gx≈0, |gy|≈1, gz≈0
             let degSide = asin(clamp(gx, -1, 1)) * 180 / .pi
             let degLean = asin(clamp(gz, -1, 1)) * 180 / .pi
             axisAName = "Left–Right"
@@ -344,8 +410,6 @@ final class LevelMotion: ObservableObject {
             modeTitle = "Upright · wall / plumb"
 
         case .side:
-            // Landscape — phone on long edge
-            // Perfect side: |gx|≈1, gy≈0, gz≈0
             let degAlong = asin(clamp(gy, -1, 1)) * 180 / .pi
             let degLean = asin(clamp(gz, -1, 1)) * 180 / .pi
             axisAName = "Along edge"
@@ -357,14 +421,12 @@ final class LevelMotion: ObservableObject {
             offsetY = mapToOffset(degLean)
             isLevel = abs(degAlong) < levelThreshold && abs(degLean) < levelThreshold
             hint = isLevel ? "LEVEL" : "Align on its side"
-            instruction = "Turn the phone on its side (landscape) on a ledge or frame."
+            instruction = "Phone on its side — align bubble to center."
             modeTitle = "Side · landscape edge"
         }
 
-        // Haptic when we snap into level
         if isLevel && !wasLevel {
-            let gen = UINotificationFeedbackGenerator()
-            gen.notificationOccurred(.success)
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
         }
         wasLevel = isLevel
     }
