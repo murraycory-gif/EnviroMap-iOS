@@ -5,33 +5,27 @@ import UIKit
 struct EnviroMapApp: App {
     @StateObject private var store = SessionStore()
 
+    private let launchDarkUI = UIColor(red: 0.06, green: 0.10, blue: 0.22, alpha: 1)
+    private let launchDark = Color(red: 0.06, green: 0.10, blue: 0.22)
+
     init() {
-        // Kill default white window / nav chrome flash before first SwiftUI frame
-        let dark = UIColor(red: 0.06, green: 0.10, blue: 0.22, alpha: 1)
-        UIWindow.appearance().backgroundColor = dark
-        UIView.appearance().backgroundColor = .clear
-        UIScrollView.appearance().backgroundColor = .clear
+        // No white UIWindow flash between system launch and first frame
+        UIWindow.appearance().backgroundColor = launchDarkUI
     }
 
     var body: some Scene {
         WindowGroup {
             ZStack {
-                // Always paint dark first — never white under RootView
-                Color(red: 0.06, green: 0.10, blue: 0.22)
-                    .ignoresSafeArea()
-
+                launchDark.ignoresSafeArea()
                 RootView()
                     .environmentObject(store)
             }
-            .preferredColorScheme(.dark) // until RootView overrides after splash
-            .background(Color(red: 0.06, green: 0.10, blue: 0.22).ignoresSafeArea())
+            .background(launchDark.ignoresSafeArea())
             .onAppear {
-                // Belt-and-suspenders: tint live key window
-                let dark = UIColor(red: 0.06, green: 0.10, blue: 0.22, alpha: 1)
                 UIApplication.shared.connectedScenes
                     .compactMap { $0 as? UIWindowScene }
                     .flatMap(\.windows)
-                    .forEach { $0.backgroundColor = dark }
+                    .forEach { $0.backgroundColor = launchDarkUI }
             }
         }
     }
