@@ -446,7 +446,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Point at everything — furniture, floor, walls, objects. Stats climb as you cover more."
+        instruction = "Slowly circle each object up close. Mesh count should climb. Cover tops, sides, and floor."
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
@@ -476,7 +476,9 @@ final class FullEnvironmentScanModel: ObservableObject {
         statusTitle = "Processing"
         instruction = "Building full-color 3D mesh…"
         controller.stopCapturing()
+        // Extra final harvest after a brief settle
         previewImage = controller.snapshot()
+        controller.forceFinalHarvest()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
@@ -528,8 +530,8 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 48
-    private let maxChunks = 120
+    private let maxKeyframes = 64
+    private let maxChunks = 400
 
     var onStats: ((Int, Int) -> Void)?
     var onError: ((String) -> Void)?
@@ -580,7 +582,14 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
 
-    func stopCapturing() { isRunning = false }
+    func stopCapturing() {
+        isRunning = false
+        // Final mesh pull while session still live
+        if let frame = arView?.session.currentFrame {
+            ingestMeshes(from: frame)
+            ingestKeyframe(from: frame)
+        }
+    }
 
     func stop() {
         isRunning = false
@@ -588,6 +597,13 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
     }
 
     func snapshot() -> UIImage? { arView?.snapshot() }
+
+    func forceFinalHarvest() {
+        if let frame = arView?.session.currentFrame {
+            ingestMeshes(from: frame)
+            ingestKeyframe(from: frame)
+        }
+    }
 
     func buildExport() -> FullEnvironmentScanModel.ExportPayload? {
         stateLock.lock()
@@ -617,13 +633,13 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         let t = frame.timestamp
 
         // Copy mesh from frame anchors (throttled) — safe snapshot
-        if t - lastMeshCopyTime >= 0.35 {
+        if t - lastMeshCopyTime >= 0.18 {
             lastMeshCopyTime = t
             ingestMeshes(from: frame)
         }
 
         // Color keyframes (throttled)
-        if t - lastKeyframeTime >= 0.28 {
+        if t - lastKeyframeTime >= 0.20 {
             lastKeyframeTime = t
             ingestKeyframe(from: frame)
         }
@@ -647,12 +663,17 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
 
         stateLock.lock()
         for c in copied {
+            // Always keep latest geometry for each mesh tile (updates fill holes)
             chunks[c.id] = c
         }
-        // Cap memory on very long scans
+        // Only drop if extreme (protects memory); prefer completeness
         if chunks.count > maxChunks {
-            let sorted = chunks.keys.prefix(chunks.count - maxChunks)
-            for k in sorted { chunks.removeValue(forKey: k) }
+            // Drop smallest chunks first (least detail), not oldest scanned areas
+            let ranked = chunks.values.sorted { $0.positions.count < $1.positions.count }
+            let removeCount = chunks.count - maxChunks
+            for i in 0..<removeCount {
+                chunks.removeValue(forKey: ranked[i].id)
+            }
         }
         let meshCount = chunks.count
         let frameCount = keyframes.count
@@ -708,7 +729,7 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         guard vCount > 0, faces.count > 0 else { return nil }
 
         // Cap per-chunk vertices to avoid memory spikes
-        guard vCount < 80_000 else { return nil }
+        guard vCount < 200_000 else { return nil }
 
         var positions = [SIMD3<Float>](repeating: .zero, count: vCount)
         var normals = [SIMD3<Float>](repeating: .zero, count: vCount)

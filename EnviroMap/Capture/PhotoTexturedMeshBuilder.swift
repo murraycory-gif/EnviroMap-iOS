@@ -367,7 +367,7 @@ enum PhotoTexturedMeshBuilder {
         var bestScore: Float = -1
 
         // Prefer recent keyframes (more likely related to current mesh)
-        let frames = keyframes.suffix(32)
+        let frames = keyframes.suffix(48)
 
         for kf in frames {
             let camPos = SIMD3<Float>(
@@ -377,12 +377,12 @@ enum PhotoTexturedMeshBuilder {
             )
             let toCam = camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.12 || dist > 5.5 { continue }
+            if dist < 0.08 || dist > 8.0 { continue }
 
             let toCamN = toCam / dist
             let facing = simd_dot(normal, toCamN)
             // Allow slightly grazing angles for more coverage
-            if facing < 0.08 { continue }
+            if facing < 0.02 { continue }
 
             guard let rgb = samplePixel(world: world, keyframe: kf) else { continue }
 
