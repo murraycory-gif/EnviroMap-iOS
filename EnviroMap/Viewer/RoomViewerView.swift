@@ -228,18 +228,20 @@ struct MeshSceneView: UIViewRepresentable {
                         .createNormalsIfAbsent: true,
                     ])
 
-                    // Make materials show real surface colors (vertex colors / textures)
+                    // Force photo / vertex colors to show (not flat gray)
                     scene.rootNode.enumerateChildNodes { node, _ in
                         guard let geos = node.geometry else { return }
                         for mat in geos.materials {
-                            mat.lightingModel = .physicallyBased
+                            mat.lightingModel = .constant
                             mat.isDoubleSided = true
-                            mat.roughness.contents = NSNumber(value: 0.85)
-                            mat.metalness.contents = NSNumber(value: 0.0)
-                            // Keep existing diffuse/texture if present
-                            if mat.diffuse.contents == nil {
-                                mat.diffuse.contents = UIColor.white
-                            }
+                            mat.diffuse.contents = UIColor.white
+                            mat.shaderModifiers = [
+                                .surface: """
+                                #pragma body
+                                _surface.diffuse = float4(_geometry.color.rgb, 1.0);
+                                _surface.emission = float4(_geometry.color.rgb * 0.08, 1.0);
+                                """
+                            ]
                         }
                     }
 

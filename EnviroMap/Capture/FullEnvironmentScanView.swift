@@ -4,38 +4,33 @@ import SceneKit
 import UIKit
 import AVFoundation
 
-/// Full-environment LiDAR scan with **real camera colors** baked on the mesh
-/// (like consumer 3D scan apps — not RoomPlan wall-only models).
+/// Full-environment LiDAR scan with real camera colors + review-before-save.
 struct FullEnvironmentScanView: View {
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var model = FullEnvironmentScanModel()
     @State private var name: String = ""
-    @State private var showSave = false
     @State private var saveError: String?
     @State private var didSave = false
 
     var body: some View {
         ZStack {
-            FullEnvARContainer(model: model)
-                .ignoresSafeArea()
+            Color(red: 0.06, green: 0.08, blue: 0.14).ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                topBar
-                Spacer()
-                bottomBar
+            switch model.phase {
+            case .idle, .scanning, .processing, .failed:
+                scanCameraLayer
+            case .preview, .saving:
+                previewLayer
             }
         }
         .preferredColorScheme(.dark)
         .onAppear {
+            if name.isEmpty { name = defaultName() }
             model.start()
-            if name.isEmpty {
-                name = defaultName()
-            }
         }
         .onDisappear { model.stop() }
-        .sheet(isPresented: $showSave) { saveSheet }
         .alert("Save Failed", isPresented: Binding(
             get: { saveError != nil },
             set: { if !$0 { saveError = nil } }
@@ -44,14 +39,24 @@ struct FullEnvironmentScanView: View {
         } message: {
             Text(saveError ?? "")
         }
-        .onChange(of: model.phase) { _, phase in
-            if phase == .readyToSave {
-                showSave = true
+    }
+
+    // MARK: - Live scan
+
+    private var scanCameraLayer: some View {
+        ZStack {
+            FullEnvARContainer(model: model)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                scanTopBar
+                Spacer()
+                scanBottomBar
             }
         }
     }
 
-    private var topBar: some View {
+    private var scanTopBar: some View {
         HStack {
             Button {
                 model.stop()
@@ -70,8 +75,8 @@ struct FullEnvironmentScanView: View {
                     .foregroundStyle(.white)
                 Text(model.detailLine)
                     .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.75))
-                Text("FULL ENV · NOT WALLS ONLY")
+                    .foregroundStyle(.white.opacity(0.8))
+                Text("Full Env · Real Colors")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
             }
@@ -82,7 +87,7 @@ struct FullEnvironmentScanView: View {
         .padding(.top, 8)
     }
 
-    private var bottomBar: some View {
+    private var scanBottomBar: some View {
         VStack(spacing: 12) {
             Text(model.instruction)
                 .font(.subheadline.weight(.semibold))
@@ -91,7 +96,7 @@ struct FullEnvironmentScanView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             HStack(spacing: 10) {
                 metric("Mesh", "\(model.meshChunks)")
@@ -105,26 +110,28 @@ struct FullEnvironmentScanView: View {
                     Button {
                         model.finishScanning()
                     } label: {
-                        Label("Done Scanning", systemImage: "checkmark.circle.fill")
-                            .font(.headline)
+                        Label("Done — Review Scan", systemImage: "checkmark.circle.fill")
+                            .font(.headline.weight(.bold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(AppTheme.blue)
+                    .disabled(model.meshChunks < 3)
 
                 case .processing:
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         ProgressView().tint(.white)
                         Text("Baking Real Colors Onto Mesh…")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
+                    .padding(.vertical, 18)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
 
                 case .failed(let msg):
-                    VStack(spacing: 10) {
+                    VStack(spacing: 12) {
                         Text(msg)
                             .font(.footnote)
                             .foregroundStyle(.orange)
@@ -134,7 +141,7 @@ struct FullEnvironmentScanView: View {
                             .tint(AppTheme.blue)
                     }
 
-                case .readyToSave, .idle:
+                default:
                     EmptyView()
                 }
             }
@@ -154,46 +161,149 @@ struct FullEnvironmentScanView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private var saveSheet: some View {
-        NavigationStack {
-            Form {
-                Section("Name") {
-                    TextField("Room Name", text: $name)
-                }
-                Section {
-                    Text("Saves a full 3D mesh with real surface colors from the camera — not just walls.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Section {
-                    Button("Save Full Scan") { save() }
-                        .font(.headline)
-                        .disabled(didSave || model.exportPayload == nil)
-                }
-            }
-            .navigationTitle("Save Full 3D Scan")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        showSave = false
-                        model.start()
+    // MARK: - Preview before save (app design language)
+
+    private var previewLayer: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button {
+                    model.rescan()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left")
+                        Text("Rescan")
                     }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AppTheme.blue)
+                }
+                Spacer()
+                Text("Review Scan")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Color.clear.frame(width: 70)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            // 3D preview
+            ZStack {
+                if let url = model.previewMeshURL {
+                    PreviewMeshView(url: url)
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .padding(.horizontal, 12)
+                } else {
+                    ProgressView().tint(.white)
+                }
+
+                VStack {
+                    Spacer()
+                    HStack {
+                        Label("Drag · Pinch To Inspect", systemImage: "hand.draw")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                        Spacer()
+                        Text("Full Color Mesh")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .padding(20)
                 }
             }
+            .frame(maxHeight: .infinity)
+
+            // Save card (matches EnviroMap light-card language on dark)
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Looks Good?")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Text("Review the full-color mesh. Rescan if holes are too big, or save to My Rooms.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.7))
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Name")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.55))
+                    TextField("Room Name", text: $name)
+                        .textFieldStyle(.plain)
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(Color.white.opacity(0.10))
+                        )
+                        .foregroundStyle(.white)
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        model.rescan()
+                    } label: {
+                        Text("Rescan")
+                            .font(.headline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color.white.opacity(0.25), lineWidth: 1.5)
+                            )
+                            .foregroundStyle(.white)
+                    }
+
+                    Button {
+                        save()
+                    } label: {
+                        Group {
+                            if model.phase == .saving {
+                                ProgressView().tint(.white)
+                            } else {
+                                Text("Save To My Rooms")
+                                    .font(.headline.weight(.bold))
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(
+                            LinearGradient(
+                                colors: [AppTheme.blue, AppTheme.blueDeep],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
+                        .foregroundStyle(.white)
+                    }
+                    .disabled(didSave || model.phase == .saving)
+                }
+            }
+            .padding(18)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(Color(red: 0.12, green: 0.14, blue: 0.22))
+                    .shadow(color: .black.opacity(0.35), radius: 20, y: -4)
+            )
+            .padding(.horizontal, 12)
+            .padding(.bottom, 16)
         }
-        .presentationDetents([.medium])
-        .interactiveDismissDisabled()
     }
 
     private func save() {
         guard let payload = model.exportPayload else {
-            saveError = "No mesh to save. Scan longer and try again."
+            saveError = "No mesh to save. Scan again."
             return
         }
+        model.phase = .saving
         do {
             _ = try store.saveFullEnvironment(
                 name: name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -204,10 +314,10 @@ struct FullEnvironmentScanView: View {
                 meshChunkCount: model.meshChunks
             )
             didSave = true
-            showSave = false
             model.stop()
             dismiss()
         } catch {
+            model.phase = .preview
             saveError = error.localizedDescription
         }
     }
@@ -219,6 +329,56 @@ struct FullEnvironmentScanView: View {
     }
 }
 
+// MARK: - Lightweight preview SCNView
+
+struct PreviewMeshView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> SCNView {
+        let v = SCNView()
+        v.backgroundColor = UIColor(red: 0.07, green: 0.08, blue: 0.12, alpha: 1)
+        v.allowsCameraControl = true
+        v.autoenablesDefaultLighting = false
+        v.antialiasingMode = .multisampling4X
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let scene = try? SCNScene(url: url, options: [
+                .createNormalsIfAbsent: true,
+                .checkConsistency: true,
+            ]) {
+                // Ensure photo vertex colors render
+                scene.rootNode.enumerateChildNodes { node, _ in
+                    guard let mats = node.geometry?.materials else { return }
+                    for mat in mats {
+                        mat.lightingModel = .constant
+                        mat.isDoubleSided = true
+                        mat.shaderModifiers = [
+                            .surface: """
+                            #pragma body
+                            _surface.diffuse = float4(_geometry.color.rgb, 1.0);
+                            _surface.emission = float4(_geometry.color.rgb * 0.08, 1.0);
+                            """
+                        ]
+                    }
+                }
+                let amb = SCNNode()
+                amb.light = SCNLight()
+                amb.light?.type = .ambient
+                amb.light?.intensity = 1000
+                scene.rootNode.addChildNode(amb)
+
+                DispatchQueue.main.async {
+                    v.scene = scene
+                    v.defaultCameraController.automaticTarget = true
+                    v.defaultCameraController.inertiaEnabled = true
+                }
+            }
+        }
+        return v
+    }
+
+    func updateUIView(_ uiView: SCNView, context: Context) {}
+}
+
 // MARK: - Model
 
 @MainActor
@@ -227,7 +387,8 @@ final class FullEnvironmentScanModel: ObservableObject {
         case idle
         case scanning
         case processing
-        case readyToSave
+        case preview
+        case saving
         case failed(String)
     }
 
@@ -237,25 +398,27 @@ final class FullEnvironmentScanModel: ObservableObject {
     }
 
     @Published var phase: Phase = .idle
-    @Published var instruction = "Move slowly. Point at everything you want in 3D."
+    @Published var instruction = "Move slowly. Cover everything you want in 3D."
     @Published var statusTitle = "Full 3D Scan"
-    @Published var detailLine = "Everything · photo colors"
+    @Published var detailLine = "LiDAR + real colors"
     @Published var meshChunks = 0
     @Published var coverageLabel = "—"
     @Published var hasColorFrames = false
     @Published var previewImage: UIImage?
     @Published var exportPayload: ExportPayload?
+    @Published var previewMeshURL: URL?
 
     let controller = FullEnvScanController()
 
     func start() {
         exportPayload = nil
+        previewMeshURL = nil
         meshChunks = 0
         hasColorFrames = false
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Point at EVERYTHING — walls, floor, furniture, objects. Blue mesh = captured."
+        instruction = "Point at everything — furniture, floor, walls, objects. Blue mesh = captured."
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
@@ -276,6 +439,11 @@ final class FullEnvironmentScanModel: ObservableObject {
         controller.stop()
     }
 
+    func rescan() {
+        controller.stop()
+        start()
+    }
+
     func finishScanning() {
         guard phase == .scanning else { return }
         phase = .processing
@@ -290,9 +458,11 @@ final class FullEnvironmentScanModel: ObservableObject {
             DispatchQueue.main.async {
                 if let result {
                     self.exportPayload = result
-                    self.phase = .readyToSave
-                    self.statusTitle = "Ready"
-                    self.instruction = "Full-color mesh ready — save it."
+                    self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
+                    self.phase = .preview
+                    self.statusTitle = "Review"
+                    self.instruction = "Inspect your full-color scan, then save."
+                    self.controller.stop()
                 } else {
                     self.phase = .failed("Not enough mesh. Scan longer and cover more surfaces.")
                 }
@@ -322,7 +492,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var meshAnchors: [UUID: ARMeshAnchor] = [:]
     private var keyframes: [PhotoTexturedMeshBuilder.Keyframe] = []
     private var lastKeyframeTime: TimeInterval = 0
-    private let maxKeyframes = 48
+    private let maxKeyframes = 72
 
     var onStats: ((Int, Int) -> Void)?
     var onError: ((String) -> Void)?
@@ -337,15 +507,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         scn.session.delegate = self
         scn.automaticallyUpdatesLighting = true
         scn.scene = SCNScene()
-        // Show camera feed
-        scn.debugOptions = []
         view.addSubview(scn)
         arView = scn
     }
 
     func start() {
-        guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
-                || ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh) else {
+        guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+                || ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) else {
             onError?("This device cannot build a LiDAR mesh.")
             return
         }
@@ -372,7 +540,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func stopCapturing() {
         isRunning = false
-        // Keep session alive briefly so final anchors stay; don't pause yet
     }
 
     func stop() {
@@ -385,7 +552,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func buildExport() -> FullEnvironmentScanModel.ExportPayload? {
+        // Snapshot anchors now (deep copy geometry lives on anchors)
         let anchors = Array(meshAnchors.values)
+        let frames = keyframes
         guard !anchors.isEmpty else { return nil }
 
         let tmp = FileManager.default.temporaryDirectory
@@ -394,18 +563,17 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         guard let fileName = PhotoTexturedMeshBuilder.export(
             anchors: anchors,
-            keyframes: keyframes,
+            keyframes: frames,
             to: tmp
         ) else { return nil }
 
         return .init(directory: tmp, fileName: fileName)
     }
 
-    // MARK: ARSCNViewDelegate — visualize mesh live
+    // MARK: Mesh viz
 
     func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
         guard anchor is ARMeshAnchor else { return nil }
-        // Empty node; geometry updated in didUpdate
         return SCNNode()
     }
 
@@ -429,10 +597,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func updateViz(node: SCNNode, mesh: ARMeshAnchor) {
-        // Live translucent mesh so user sees coverage while scanning
         guard let geom = Self.quickGeometry(mesh.geometry) else { return }
         node.geometry = geom
-        node.simdTransform = matrix_identity_float4x4 // ARSCNView applies anchor transform
     }
 
     private static func quickGeometry(_ mesh: ARMeshGeometry) -> SCNGeometry? {
@@ -477,23 +643,21 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let geom = SCNGeometry(sources: [source], elements: [element])
         let mat = SCNMaterial()
         mat.fillMode = .lines
-        mat.diffuse.contents = UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 0.85)
+        mat.diffuse.contents = UIColor(red: 0.3, green: 0.75, blue: 1.0, alpha: 0.9)
         mat.isDoubleSided = true
         mat.lightingModel = .constant
         geom.materials = [mat]
         return geom
     }
 
-    // MARK: ARSessionDelegate — keyframes for color
+    // MARK: Color keyframes
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isRunning else { return }
         let t = frame.timestamp
-        // ~3 keyframes/sec max
-        if t - lastKeyframeTime < 0.33 { return }
+        if t - lastKeyframeTime < 0.22 { return } // ~4–5 fps keyframes
         lastKeyframeTime = t
 
-        // Copy pixel buffer (ARFrame buffer is reused)
         guard let copied = Self.copyPixelBuffer(frame.capturedImage) else { return }
 
         let orientation = UIApplication.shared.connectedScenes
@@ -501,12 +665,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             .first?.interfaceOrientation ?? .portrait
 
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
+        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
 
         let kf = PhotoTexturedMeshBuilder.Keyframe(
             camera: frame.camera,
             image: copied,
             orientation: orientation,
             viewport: viewport,
+            displayTransform: display,
             capturedAt: t
         )
         keyframes.append(kf)
@@ -529,14 +695,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let height = CVPixelBufferGetHeight(source)
         let format = CVPixelBufferGetPixelFormatType(source)
         var copy: CVPixelBuffer?
-        let attrs: [CFString: Any] = [
-            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
-        ]
-        let status = CVPixelBufferCreate(
-            kCFAllocatorDefault, width, height, format,
-            attrs as CFDictionary, &copy
-        )
-        guard status == kCVReturnSuccess, let copy else { return nil }
+        let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+        guard CVPixelBufferCreate(kCFAllocatorDefault, width, height, format, attrs as CFDictionary, &copy) == kCVReturnSuccess,
+              let copy else { return nil }
 
         CVPixelBufferLockBaseAddress(source, .readOnly)
         CVPixelBufferLockBaseAddress(copy, [])
