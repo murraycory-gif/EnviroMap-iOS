@@ -36,6 +36,8 @@
 		A1C /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C /* AppTheme.swift */; };
 		A1D /* EnviroMapLogo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D /* EnviroMapLogo.swift */; };
 		A1E /* DenseMeshCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F /* DenseMeshCollector.swift */; };
+		A1F /* FullEnvironmentScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20 /* FullEnvironmentScanView.swift */; };
+		A20 /* PhotoTexturedMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21 /* PhotoTexturedMeshBuilder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -70,6 +72,8 @@
 		B1D /* EnviroMapLogo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnviroMapLogo.swift; sourceTree = "<group>"; };
 		B1E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B1F /* DenseMeshCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DenseMeshCollector.swift; sourceTree = "<group>"; };
+		B20 /* FullEnvironmentScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullEnvironmentScanView.swift; sourceTree = "<group>"; };
+		B21 /* PhotoTexturedMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoTexturedMeshBuilder.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -144,6 +148,8 @@
 				B06 /* RoomCaptureRepresentable.swift */,
 				B07 /* ScanFlowView.swift */,
 				B1F /* DenseMeshCollector.swift */,
+				B20 /* FullEnvironmentScanView.swift */,
+				B21 /* PhotoTexturedMeshBuilder.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -262,6 +268,8 @@
 				A1C /* AppTheme.swift in Sources */,
 				A1D /* EnviroMapLogo.swift in Sources */,
 				A1E /* DenseMeshCollector.swift in Sources */,
+				A1F /* FullEnvironmentScanView.swift in Sources */,
+				A20 /* PhotoTexturedMeshBuilder.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -177,7 +177,7 @@ struct ToolsHomeView: View {
                 destination(for: route)
             }
             .fullScreenCover(isPresented: $showScanner) {
-                ScanFlowView()
+                FullEnvironmentScanView()
                     .environmentObject(store)
             }
             .onChange(of: showScanner) { _, open in
@@ -428,7 +428,7 @@ struct MoreToolsTabView: View {
                 }
             }
             .fullScreenCover(isPresented: $showScanner) {
-                ScanFlowView()
+                FullEnvironmentScanView()
                     .environmentObject(store)
             }
         }

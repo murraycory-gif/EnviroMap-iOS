@@ -14,7 +14,7 @@ Last updated: 2026-08-08
 | OI-008 | 3D Mesh Viewer | Freeze when opening mesh from prior scan | High | Open | 2026-08-07 | | SceneKit path added earlier; re-verify after recent pulls |
 | OI-009 | Floor Plan | Navigation tries to open then fails / incomplete | High | Open | 2026-08-07 | | Library fullScreenCover routing — re-test Session Detail |
 | OI-010 | Session Detail | Buttons (Room Planner, Floor Plan, 3D Mesh, Walk AR) not always working | High | Open | 2026-08-07 | | Design pass also requested to match home theme |
-| OI-011 | 3D Mesh Content | Viewer shows walls/openings mainly; user wants “everything” mapped | High | In Progress | 2026-08-08 | | Dense LiDAR mesh collector + colored export added; needs device QA (new scan required) |
+| OI-011 | 3D Mesh Content | Viewer shows walls/openings mainly; user wants “everything” mapped | High | In Progress | 2026-08-08 | | FullEnvironmentScan: LiDAR mesh + camera color bake (competitor-style). New Scan uses this path. |
 | OI-012 | Room Planner | Dated/clunky; need modern 3D furniture + solid interactions | Medium | Open | 2026-08-07 | | 3D mode started; polish + button actions |
 | OI-013 | Ruler / Area / Level | Measure tools UX polish + Title Case copy standard | Low | Open | 2026-08-08 | | Level copy Title Case applied; apply same standard app-wide |
 | OI-014 | More Tools | Photo To 3D / Words To 3D are lightweight placeholders vs full product vision | Medium | Open | | | Keep as secondary; define v1 scope |

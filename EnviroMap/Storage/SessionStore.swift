@@ -125,6 +125,47 @@ final class SessionStore: ObservableObject {
         return session
     }
 
+
+    /// Save a full-environment photo-textured mesh produced by FullEnvironmentScan.
+    func saveFullEnvironment(
+        name: String,
+        notes: String,
+        meshFileName: String,
+        sourceDirectory: URL,
+        preview: UIImage?,
+        meshChunkCount: Int
+    ) throws -> RoomSession {
+        var session = RoomSession.makeNew(name: name.isEmpty ? defaultName() : name)
+        session.notes = notes
+        session.wallCount = 0
+        session.objectCount = meshChunkCount
+        session.doorCount = 0
+        session.windowCount = 0
+        session.hasDenseMesh = true
+        session.denseMeshFileName = meshFileName
+        // Also set primary usdz to full mesh so viewers always open the real scan
+        session.usdzFileName = meshFileName
+
+        let folder = folderURL(for: session)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let src = sourceDirectory.appendingPathComponent(meshFileName)
+        let dest = folder.appendingPathComponent(meshFileName)
+        if fileManager.fileExists(atPath: dest.path) {
+            try fileManager.removeItem(at: dest)
+        }
+        try fileManager.copyItem(at: src, to: dest)
+
+        if let image = preview, let jpeg = image.jpegData(compressionQuality: 0.75) {
+            let thumbName = session.thumbnailFileName ?? "thumb.jpg"
+            try jpeg.write(to: folder.appendingPathComponent(thumbName), options: [.atomic])
+        }
+
+        sessions.insert(session, at: 0)
+        try saveIndex()
+        return session
+    }
+
     func rename(_ session: RoomSession, to name: String) {
         guard let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         sessions[idx].name = name
