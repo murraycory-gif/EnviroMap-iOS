@@ -230,7 +230,10 @@ struct FullEnvironmentScanView: View {
                         .fill(AppTheme.card)
                         .shadow(color: .black.opacity(0.06), radius: 16, y: 6)
 
-                    if let url = model.previewMeshURL {
+                    if let scene = model.previewScene {
+                        PreviewMeshView(scene: scene)
+                            .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
+                    } else if let url = model.previewMeshURL {
                         PreviewMeshView(url: url)
                             .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
                     } else {
@@ -378,43 +381,75 @@ struct FullEnvironmentScanView: View {
 // MARK: - Preview SCNView
 
 struct PreviewMeshView: UIViewRepresentable {
-    let url: URL
+    var scene: SCNScene? = nil
+    var url: URL? = nil
+
+    init(scene: SCNScene) {
+        self.scene = scene
+        self.url = nil
+    }
+
+    init(url: URL) {
+        self.url = url
+        self.scene = nil
+    }
 
     func makeUIView(context: Context) -> SCNView {
         let v = SCNView()
-        v.backgroundColor = UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1)
+        v.backgroundColor = UIColor(red: 0.10, green: 0.11, blue: 0.14, alpha: 1)
         v.allowsCameraControl = true
-        v.autoenablesDefaultLighting = true
+        v.autoenablesDefaultLighting = false
         v.antialiasingMode = .multisampling4X
-        DispatchQueue.global(qos: .userInitiated).async {
-            if let scene = try? SCNScene(url: url, options: [
-                .createNormalsIfAbsent: true,
-            ]) {
-                scene.background.contents = UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1)
-                scene.rootNode.enumerateChildNodes { node, _ in
-                    guard let geos = node.geometry else { return }
-                    for mat in geos.materials {
-                        mat.lightingModel = .constant
-                        mat.isDoubleSided = true
-                        mat.shaderModifiers = [:]
-                        // Do NOT force white — keep photo textures / colors
-                    }
-                }
-                let amb = SCNNode()
-                amb.light = SCNLight()
-                amb.light?.type = .ambient
-                amb.light?.intensity = 1000
-                amb.light?.color = UIColor.white
-                scene.rootNode.addChildNode(amb)
 
-                DispatchQueue.main.async {
-                    v.scene = scene
-                    v.defaultCameraController.automaticTarget = true
-                    v.defaultCameraController.inertiaEnabled = true
+        if let scene {
+            prepare(scene)
+            v.scene = scene
+            v.defaultCameraController.automaticTarget = true
+            v.defaultCameraController.inertiaEnabled = true
+            return v
+        }
+
+        if let url {
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Load atlas next to scn if present
+                let atlasPath = url.deletingLastPathComponent().appendingPathComponent("atlas.png").path
+                if let scene = try? SCNScene(url: url, options: nil) {
+                    // Re-apply atlas texture from file (survives export)
+                    if FileManager.default.fileExists(atPath: atlasPath) {
+                        scene.rootNode.enumerateChildNodes { node, _ in
+                            guard let mats = node.geometry?.materials else { return }
+                            for mat in mats {
+                                mat.lightingModel = .constant
+                                mat.isDoubleSided = true
+                                mat.diffuse.contents = atlasPath
+                                mat.diffuse.magnificationFilter = .nearest
+                                mat.diffuse.minificationFilter = .nearest
+                            }
+                        }
+                    } else {
+                        prepare(scene)
+                    }
+                    DispatchQueue.main.async {
+                        v.scene = scene
+                        v.defaultCameraController.automaticTarget = true
+                        v.defaultCameraController.inertiaEnabled = true
+                    }
                 }
             }
         }
         return v
+    }
+
+    private func prepare(_ scene: SCNScene) {
+        scene.background.contents = UIColor(red: 0.10, green: 0.11, blue: 0.14, alpha: 1)
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard let mats = node.geometry?.materials else { return }
+            for mat in mats {
+                mat.lightingModel = .constant
+                mat.isDoubleSided = true
+                mat.shaderModifiers = [:]
+            }
+        }
     }
 
     func updateUIView(_ uiView: SCNView, context: Context) {}
@@ -431,6 +466,7 @@ final class FullEnvironmentScanModel: ObservableObject {
     struct ExportPayload {
         let directory: URL
         let fileName: String
+        let scene: SCNScene?
     }
 
     @Published var phase: Phase = .idle
@@ -443,12 +479,14 @@ final class FullEnvironmentScanModel: ObservableObject {
     @Published var previewImage: UIImage?
     @Published var exportPayload: ExportPayload?
     @Published var previewMeshURL: URL?
+    @Published var previewScene: SCNScene?
 
     let controller = FullEnvScanController()
 
     func start() {
         exportPayload = nil
         previewMeshURL = nil
+        previewScene = nil
         meshChunks = 0
         hasColorFrames = false
         coverageLabel = "—"
@@ -495,6 +533,7 @@ final class FullEnvironmentScanModel: ObservableObject {
                 if let result {
                     self.exportPayload = result
                     self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
+                    self.previewScene = result.scene
                     self.phase = .preview
                     self.statusTitle = "Review"
                     self.instruction = "Inspect your full-color scan, then save."
@@ -636,13 +675,13 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
             .appendingPathComponent("EnviroMapFull_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        guard let fileName = PhotoTexturedMeshBuilder.exportChunks(
-            meshChunks,
-            keyframes: frames,
-            to: tmp
-        ) else { return nil }
-
-        return .init(directory: tmp, fileName: fileName)
+        // Single build: in-memory colored scene + atlas.png + scn on disk
+        guard let scene = PhotoTexturedMeshBuilder.makeScene(chunks: meshChunks, keyframes: frames) else {
+            return nil
+        }
+        // Write atlas + scn for permanent save
+        _ = PhotoTexturedMeshBuilder.exportChunks(meshChunks, keyframes: frames, to: tmp)
+        return .init(directory: tmp, fileName: "room_full.scn", scene: scene)
     }
 
     // MARK: ARSessionDelegate

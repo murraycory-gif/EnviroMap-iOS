@@ -156,6 +156,16 @@ final class SessionStore: ObservableObject {
         }
         try fileManager.copyItem(at: src, to: dest)
 
+        // Color atlas (required for colored mesh reload)
+        let atlasSrc = sourceDirectory.appendingPathComponent("atlas.png")
+        let atlasDest = folder.appendingPathComponent("atlas.png")
+        if fileManager.fileExists(atPath: atlasSrc.path) {
+            if fileManager.fileExists(atPath: atlasDest.path) {
+                try? fileManager.removeItem(at: atlasDest)
+            }
+            try? fileManager.copyItem(at: atlasSrc, to: atlasDest)
+        }
+
         if let image = preview, let jpeg = image.jpegData(compressionQuality: 0.75) {
             let thumbName = session.thumbnailFileName ?? "thumb.jpg"
             try jpeg.write(to: folder.appendingPathComponent(thumbName), options: [.atomic])
