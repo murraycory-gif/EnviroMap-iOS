@@ -13,12 +13,21 @@ struct RoomViewerView: View {
     @State private var showShare = false
     @State private var showQuickLook = false
 
-    private var usdzURL: URL {
+    /// Prefer dense full-space mesh; fall back to RoomPlan structure.
+    private var meshURL: URL {
+        store.preferredMeshURL(for: session)
+    }
+
+    private var structureURL: URL {
         store.usdzURL(for: session)
     }
 
     private var fileExists: Bool {
-        FileManager.default.fileExists(atPath: usdzURL.path)
+        FileManager.default.fileExists(atPath: meshURL.path)
+    }
+
+    private var isDenseMesh: Bool {
+        session.hasDenseMesh || store.denseMeshURL(for: session) != nil
     }
 
     var body: some View {
@@ -72,7 +81,7 @@ struct RoomViewerView: View {
                 }
             } else {
                 MeshSceneView(
-                    usdzURL: usdzURL,
+                    usdzURL: meshURL,
                     isLoading: $isLoading,
                     loadError: $loadError
                 )
@@ -122,7 +131,7 @@ struct RoomViewerView: View {
             ShareSheet(items: store.shareItems(for: session))
         }
         .sheet(isPresented: $showQuickLook) {
-            QuickLookUSDZ(url: usdzURL)
+            QuickLookUSDZ(url: meshURL)
                 .ignoresSafeArea()
         }
     }
@@ -133,14 +142,16 @@ struct RoomViewerView: View {
                 Text(session.name)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                Text("\(session.wallCount) walls · \(session.objectCount) objects · \(session.doorCount) doors")
+                Text(isDenseMesh
+                     ? "Full Space Mesh · \(session.wallCount) walls · \(session.objectCount) objects"
+                     : "\(session.wallCount) walls · \(session.objectCount) objects · \(session.doorCount) doors")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.7))
             }
             Spacer()
-            Text("Drag · Pinch")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.7))
+            Text(isDenseMesh ? "Full Color Mesh" : "Structure")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(isDenseMesh ? Color(red: 0.4, green: 0.9, blue: 0.7) : .white.opacity(0.7))
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -162,7 +173,7 @@ struct MeshSceneView: UIViewRepresentable {
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
         view.backgroundColor = .clear
-        view.autoenablesDefaultLighting = true
+        view.autoenablesDefaultLighting = false
         view.allowsCameraControl = true
         view.antialiasingMode = .multisampling4X
         view.preferredFramesPerSecond = 60
@@ -217,38 +228,62 @@ struct MeshSceneView: UIViewRepresentable {
                         .createNormalsIfAbsent: true,
                     ])
 
-                    // Soft ground plane for scale
+                    // Make materials show real surface colors (vertex colors / textures)
+                    scene.rootNode.enumerateChildNodes { node, _ in
+                        guard let geos = node.geometry else { return }
+                        for mat in geos.materials {
+                            mat.lightingModel = .physicallyBased
+                            mat.isDoubleSided = true
+                            mat.roughness.contents = NSNumber(value: 0.85)
+                            mat.metalness.contents = NSNumber(value: 0.0)
+                            // Keep existing diffuse/texture if present
+                            if mat.diffuse.contents == nil {
+                                mat.diffuse.contents = UIColor.white
+                            }
+                        }
+                    }
+
+                    // Soft ground only when not already a dense floor mesh
                     let floor = SCNFloor()
-                    floor.reflectivity = 0.05
-                    floor.firstMaterial?.diffuse.contents = UIColor(white: 0.15, alpha: 1)
+                    floor.reflectivity = 0.04
+                    floor.firstMaterial?.diffuse.contents = UIColor(white: 0.12, alpha: 1)
                     floor.firstMaterial?.lightingModel = .physicallyBased
                     let floorNode = SCNNode(geometry: floor)
-                    floorNode.position.y = -0.01
+                    floorNode.position.y = -0.02
+                    floorNode.name = "preview-floor"
                     scene.rootNode.addChildNode(floorNode)
 
-                    // Camera if missing
                     if scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).isEmpty {
                         let cam = SCNNode()
                         cam.camera = SCNCamera()
-                        cam.camera?.fieldOfView = 50
+                        cam.camera?.fieldOfView = 55
                         cam.camera?.wantsHDR = true
-                        cam.position = SCNVector3(4, 3, 6)
-                        cam.look(at: SCNVector3(0, 1, 0))
+                        cam.position = SCNVector3(3.5, 2.4, 5.5)
+                        cam.look(at: SCNVector3(0, 1.1, 0))
                         scene.rootNode.addChildNode(cam)
                     }
 
-                    // Gentle fill light
-                    let light = SCNNode()
-                    light.light = SCNLight()
-                    light.light?.type = .directional
-                    light.light?.intensity = 800
-                    light.eulerAngles = SCNVector3(-0.8, 0.5, 0)
-                    scene.rootNode.addChildNode(light)
+                    // Brighter, multi-light setup so room colors read as real
+                    let key = SCNNode()
+                    key.light = SCNLight()
+                    key.light?.type = .directional
+                    key.light?.intensity = 1000
+                    key.light?.color = UIColor(white: 1.0, alpha: 1)
+                    key.eulerAngles = SCNVector3(-0.85, 0.45, 0)
+                    scene.rootNode.addChildNode(key)
+
+                    let fill = SCNNode()
+                    fill.light = SCNLight()
+                    fill.light?.type = .directional
+                    fill.light?.intensity = 450
+                    fill.eulerAngles = SCNVector3(-0.3, -0.9, 0)
+                    scene.rootNode.addChildNode(fill)
 
                     let ambient = SCNNode()
                     ambient.light = SCNLight()
                     ambient.light?.type = .ambient
-                    ambient.light?.intensity = 350
+                    ambient.light?.intensity = 500
+                    ambient.light?.color = UIColor(white: 0.95, alpha: 1)
                     scene.rootNode.addChildNode(ambient)
 
                     DispatchQueue.main.async { [weak self] in

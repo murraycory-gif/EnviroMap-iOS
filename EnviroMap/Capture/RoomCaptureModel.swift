@@ -241,6 +241,8 @@ final class RoomCaptureHostController: UIViewController {
     private var roomCaptureView: RoomCaptureView?
     private var isRunning = false
     private var startWorkItem: DispatchWorkItem?
+    private let denseMesh = DenseMeshCollector()
+    private var harvestTimer: Timer?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -312,12 +314,24 @@ final class RoomCaptureHostController: UIViewController {
         let configuration = RoomCaptureSession.Configuration()
         isRunning = true
         roomCaptureView.captureSession.run(configuration: configuration)
+
+        // Collect full LiDAR mesh (real surfaces) alongside RoomPlan structure
+        let arSession = roomCaptureView.captureSession.arSession
+        denseMesh.attach(to: arSession)
+        startHarvestTimer()
+
         model?.setTrackingLabel("Locking position…")
     }
 
     func stopSession() {
         startWorkItem?.cancel()
         startWorkItem = nil
+        // Final harvest before session stops
+        if let ar = roomCaptureView?.captureSession.arSession {
+            denseMesh.harvest(from: ar)
+        }
+        denseMesh.stop()
+        stopHarvestTimer()
         guard let roomCaptureView else { return }
         if isRunning {
             roomCaptureView.captureSession.stop()
@@ -328,6 +342,8 @@ final class RoomCaptureHostController: UIViewController {
     func tearDownCaptureView() {
         startWorkItem?.cancel()
         startWorkItem = nil
+        stopHarvestTimer()
+        denseMesh.detach()
         if isRunning {
             roomCaptureView?.captureSession.stop()
             isRunning = false
@@ -336,6 +352,31 @@ final class RoomCaptureHostController: UIViewController {
         roomCaptureView?.captureSession.delegate = nil
         roomCaptureView?.removeFromSuperview()
         roomCaptureView = nil
+    }
+
+    /// Export dense full-space mesh into a scan folder. Returns filename or nil.
+    func exportDenseMesh(to directory: URL) -> String? {
+        if let ar = roomCaptureView?.captureSession.arSession {
+            denseMesh.harvest(from: ar)
+        }
+        return denseMesh.export(to: directory)
+    }
+
+    var denseMeshAnchorCount: Int { denseMesh.meshCount }
+
+    private func startHarvestTimer() {
+        stopHarvestTimer()
+        harvestTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if let ar = self.roomCaptureView?.captureSession.arSession {
+                self.denseMesh.harvest(from: ar)
+            }
+        }
+    }
+
+    private func stopHarvestTimer() {
+        harvestTimer?.invalidate()
+        harvestTimer = nil
     }
 
     func snapshotThumbnail() -> UIImage? {
@@ -359,7 +400,7 @@ extension RoomCaptureHostController: RoomCaptureViewDelegate {
             model?.setResult(room: nil, error: error)
             return false
         }
-        model?.setPhase(.processing, instruction: "Processing walls, doors, and objects…")
+        model?.setPhase(.processing, instruction: "Building full room mesh + structure…")
         return true
     }
 

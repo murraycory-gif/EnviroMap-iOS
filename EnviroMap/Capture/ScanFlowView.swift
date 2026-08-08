@@ -272,7 +272,10 @@ struct ScanFlowView: View {
                 room,
                 name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                 notes: notes,
-                previewImage: model.viewController.snapshotThumbnail()
+                previewImage: model.viewController.snapshotThumbnail(),
+                denseMeshExporter: { folder in
+                    model.viewController.exportDenseMesh(to: folder)
+                }
             )
             didSave = true
             showSaveSheet = false

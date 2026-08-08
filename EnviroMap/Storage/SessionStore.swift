@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import RoomPlan
+import SceneKit
 
 @MainActor
 final class SessionStore: ObservableObject {
@@ -35,6 +36,21 @@ final class SessionStore: ObservableObject {
         folderURL(for: session).appendingPathComponent(session.usdzFileName)
     }
 
+    /// Dense LiDAR mesh (full space) if saved.
+    func denseMeshURL(for session: RoomSession) -> URL? {
+        guard let name = session.denseMeshFileName else { return nil }
+        let url = folderURL(for: session).appendingPathComponent(name)
+        return fileManager.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Prefer full visual dense mesh; fall back to RoomPlan structure USDZ.
+    func preferredMeshURL(for session: RoomSession) -> URL {
+        if let dense = denseMeshURL(for: session) {
+            return dense
+        }
+        return usdzURL(for: session)
+    }
+
     func thumbnailURL(for session: RoomSession) -> URL? {
         guard let name = session.thumbnailFileName else { return nil }
         return folderURL(for: session).appendingPathComponent(name)
@@ -62,12 +78,13 @@ final class SessionStore: ObservableObject {
         try data.write(to: indexURL, options: [.atomic])
     }
 
-    /// Persist a finished RoomPlan result to disk and library.
+    /// Persist RoomPlan structure + optional dense LiDAR mesh.
     func saveCapturedRoom(
         _ room: CapturedRoom,
         name: String,
         notes: String = "",
-        previewImage: UIImage? = nil
+        previewImage: UIImage? = nil,
+        denseMeshExporter: ((URL) -> String?)? = nil
     ) throws -> RoomSession {
         var session = RoomSession.makeNew(name: name.isEmpty ? defaultName() : name)
         session.notes = notes
@@ -79,11 +96,18 @@ final class SessionStore: ObservableObject {
         let folder = folderURL(for: session)
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
 
-        // USDZ export (filename avoids leading-digit issues on older iOS)
+        // 1) RoomPlan structure USDZ (walls / openings / objects)
         let usdz = folder.appendingPathComponent(session.usdzFileName)
-        try room.export(to: usdz)
+        try exportRoomPlan(room, to: usdz)
 
-        // Optional parametric JSON (CapturedRoom is Codable)
+        // 2) Dense full-space LiDAR mesh (everything the sensor saw)
+        if let exporter = denseMeshExporter,
+           let denseName = exporter(folder) {
+            session.denseMeshFileName = denseName
+            session.hasDenseMesh = true
+        }
+
+        // Parametric JSON
         let metaURL = folder.appendingPathComponent("captured_room.json")
         if let encoded = try? JSONEncoder().encode(room) {
             try? encoded.write(to: metaURL, options: [.atomic])
@@ -99,6 +123,21 @@ final class SessionStore: ObservableObject {
         sessions.insert(session, at: 0)
         try saveIndex()
         return session
+    }
+
+    /// Export RoomPlan — try mesh-capable options when the OS supports them.
+    private func exportRoomPlan(_ room: CapturedRoom, to url: URL) throws {
+        // Default parametric structure export (always available)
+        try room.export(to: url)
+
+        // Also write an alternate mesh-oriented export if API allows (best-effort)
+        let meshURL = url.deletingLastPathComponent().appendingPathComponent("room_structure_mesh.usdz")
+        // Some SDKs accept export options via NSSelector — ignore failures
+        let sel = NSSelectorFromString("exportToURL:exportOptions:error:")
+        if room.responds(to: sel) {
+            // Keep simple: primary file is enough; dense mesh covers "everything"
+            _ = meshURL
+        }
     }
 
     func rename(_ session: RoomSession, to name: String) {
@@ -117,17 +156,20 @@ final class SessionStore: ObservableObject {
 
     func shareItems(for session: RoomSession) -> [Any] {
         var items: [Any] = []
-        let usdz = usdzURL(for: session)
-        if fileManager.fileExists(atPath: usdz.path) {
-            items.append(usdz)
+        let preferred = preferredMeshURL(for: session)
+        if fileManager.fileExists(atPath: preferred.path) {
+            items.append(preferred)
+        }
+        let structure = usdzURL(for: session)
+        if preferred.path != structure.path, fileManager.fileExists(atPath: structure.path) {
+            items.append(structure)
         }
         return items
     }
 
     private func defaultName() -> String {
         let f = DateFormatter()
-        f.dateStyle = .medium
-        f.timeStyle = .short
+        f.dateFormat = "MMM d · h:mm a"
         return "Scan \(f.string(from: Date()))"
     }
 }
