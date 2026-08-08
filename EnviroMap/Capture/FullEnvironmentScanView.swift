@@ -498,7 +498,7 @@ final class FullEnvironmentScanModel: ObservableObject {
             Task { @MainActor in
                 self?.meshChunks = chunks
                 self?.hasColorFrames = frames > 0
-                self?.coverageLabel = chunks > 40 ? "Good" : chunks > 15 ? "OK" : "Low"
+                self?.coverageLabel = chunks > 80 ? "Great" : chunks > 35 ? "Good" : chunks > 12 ? "OK" : "Low"
                 self?.detailLine = "\(chunks) mesh pieces · \(frames) color frames"
             }
         }
@@ -521,7 +521,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         guard phase == .scanning else { return }
         phase = .processing
         statusTitle = "Processing"
-        instruction = "Building full-color 3D mesh…"
+        instruction = "Baking photo colors (fast)…"
         controller.stopCapturing()
         // Extra final harvest after a brief settle
         previewImage = controller.snapshot()
@@ -578,8 +578,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 80
-    private let maxChunks = 600
+    private let maxKeyframes = 120
+    private let maxChunks = 1200
     private var coverageRoot: SCNNode?
     private var lastMarkerUpdate: TimeInterval = 0
 
@@ -644,11 +644,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func stopCapturing() {
         isRunning = false
-        // Final mesh pull while session still live
-        if let frame = arView?.session.currentFrame {
-            ingestMeshes(from: frame)
-            ingestKeyframe(from: frame)
-        }
+        forceFinalHarvest()
     }
 
     func stop() {
@@ -659,9 +655,21 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
+        // Multiple pulls while session still has dense mesh anchors
         if let frame = arView?.session.currentFrame {
             ingestMeshes(from: frame)
             ingestKeyframe(from: frame)
+        }
+        // Also scrape any ARMeshAnchors still tracked by the session
+        if let anchors = arView?.session.currentFrame?.anchors {
+            for a in anchors {
+                guard let mesh = a as? ARMeshAnchor else { continue }
+                if let chunk = Self.copyChunk(from: mesh) {
+                    stateLock.lock()
+                    chunks[chunk.id] = chunk
+                    stateLock.unlock()
+                }
+            }
         }
     }
 
@@ -677,13 +685,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             .appendingPathComponent("EnviroMapFull_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        // Single build: in-memory colored scene + atlas.png + scn on disk
-        guard let scene = PhotoTexturedMeshBuilder.makeScene(chunks: meshChunks, keyframes: frames) else {
-            return nil
-        }
-        // Write atlas + scn for permanent save
-        _ = PhotoTexturedMeshBuilder.exportChunks(meshChunks, keyframes: frames, to: tmp)
-        return .init(directory: tmp, fileName: "room_full.scn", scene: scene)
+        // One bake only (concurrent color + write) — much faster Done
+        guard let built = PhotoTexturedMeshBuilder.buildAndExport(
+            chunks: meshChunks,
+            keyframes: frames,
+            to: tmp
+        ) else { return nil }
+
+        return .init(directory: tmp, fileName: built.fileName, scene: built.scene)
     }
 
 
@@ -713,7 +722,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[mesh.identifier], now - last < 0.45 { return }
+        if let last = lastVizTime[mesh.identifier], now - last < 0.28 { return }
         lastVizTime[mesh.identifier] = now
         applyBlueWire(node: node, mesh: mesh)
         if let chunk = Self.copyChunk(from: mesh) {
@@ -793,13 +802,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let t = frame.timestamp
 
         // Copy mesh from frame anchors (throttled) — safe snapshot
-        if t - lastMeshCopyTime >= 0.12 {
+        if t - lastMeshCopyTime >= 0.07 {
             lastMeshCopyTime = t
             ingestMeshes(from: frame)
         }
 
         // Color keyframes (throttled)
-        if t - lastKeyframeTime >= 0.16 {
+        if t - lastKeyframeTime >= 0.11 {
             lastKeyframeTime = t
             ingestKeyframe(from: frame)
         }
@@ -891,7 +900,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             from: frame,
             orientation: orientation,
             viewport: viewport,
-            maxWidth: 512
+            maxWidth: 640
         ) else { return }
 
         stateLock.lock()
@@ -925,7 +934,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         guard vCount > 0, faces.count > 0 else { return nil }
 
         // Cap per-chunk vertices to avoid memory spikes
-        guard vCount < 200_000 else { return nil }
+        guard vCount < 250_000 else { return nil }
 
         var positions = [SIMD3<Float>](repeating: .zero, count: vCount)
         var normals = [SIMD3<Float>](repeating: .zero, count: vCount)
