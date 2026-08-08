@@ -123,12 +123,13 @@ final class DenseMeshCollector: NSObject, ARSessionDelegate {
         guard let scene = makeColoredScene() else { return nil }
 
         let usdzURL = directory.appendingPathComponent(preferredName)
-        if scene.write(to: usdzURL, options: nil) {
+        // Xcode requires explicit delegate / progressHandler on SCNScene.write
+        if scene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil) {
             return preferredName
         }
         let scnName = "room_dense.scn"
         let scnURL = directory.appendingPathComponent(scnName)
-        if scene.write(to: scnURL, options: nil) {
+        if scene.write(to: scnURL, options: nil, delegate: nil, progressHandler: nil) {
             return scnName
         }
         return nil
