@@ -112,26 +112,9 @@ struct LevelToolView: View {
 
     private func landscapeChrome(size: CGSize, safe: EdgeInsets) -> some View {
         ZStack {
-            // Top-right modes
-            VStack {
-                HStack {
-                    Spacer()
-                    modeChips
-                        .padding(.trailing, max(safe.trailing, 20))
-                        .padding(.top, max(safe.top, 12) + 8)
-                }
-                Spacer()
-            }
-
-            // Left data column — vertically centered, clear of HUD
+            // Left data column — no mode title text
             HStack {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(motion.modeTitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                        .textCase(.uppercase)
-                        .tracking(0.8)
-
                     Text(String(format: "%.0f°", motion.primaryDeg))
                         .font(.system(size: 72, weight: .bold, design: .rounded))
                         .monospacedDigit()
@@ -159,10 +142,26 @@ struct LevelToolView: View {
                 .padding(.leading, max(safe.leading, 16) + 52) // clear of back button
                 .frame(maxHeight: .infinity, alignment: .center)
 
-                Spacer(minLength: size.width * 0.42) // leave center for HUD
+                Spacer()
+            }
+
+            // Mode chips — vertical stack on the right
+            HStack {
+                Spacer()
+                modeChipsVertical
+                    .padding(.trailing, max(safe.trailing, 16))
             }
         }
         .frame(width: size.width, height: size.height)
+    }
+
+    /// Flat / Upright / Side stacked down the right edge
+    private var modeChipsVertical: some View {
+        VStack(spacing: 10) {
+            modeChip(.flat, icon: "rectangle.landscape.rotate")
+            modeChip(.upright, icon: "iphone")
+            modeChip(.side, icon: "iphone.landscape")
+        }
     }
 
     // MARK: - Pieces
@@ -181,15 +180,18 @@ struct LevelToolView: View {
 
     private func modeChip(_ mode: LevelMotion.Mode, icon: String) -> some View {
         let on = motion.mode == mode
-        return HStack(spacing: 5) {
+        return HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.caption2.weight(.bold))
+                .font(.caption.weight(.bold))
+                .frame(width: 16)
             Text(mode.label)
                 .font(.caption.weight(.bold))
+            Spacer(minLength: 0)
         }
-        .foregroundStyle(on ? .white : .white.opacity(0.5))
+        .foregroundStyle(on ? .white : .white.opacity(0.55))
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.vertical, 11)
+        .frame(width: 118, alignment: .leading)
         .background {
             if on {
                 Capsule().fill(AppTheme.blue)
