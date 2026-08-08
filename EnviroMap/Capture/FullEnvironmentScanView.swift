@@ -489,9 +489,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var arView: ARSCNView!
     private var isRunning = false
 
+    private let stateLock = NSLock()
     private var meshAnchors: [UUID: ARMeshAnchor] = [:]
     private var keyframes: [PhotoTexturedMeshBuilder.Keyframe] = []
     private var lastKeyframeTime: TimeInterval = 0
+    private var lastStatsEmit: TimeInterval = 0
     private let maxKeyframes = 72
 
     var onStats: ((Int, Int) -> Void)?
@@ -518,9 +520,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
 
+        stateLock.lock()
         meshAnchors.removeAll()
         keyframes.removeAll()
         lastKeyframeTime = 0
+        lastStatsEmit = 0
+        stateLock.unlock()
 
         let config = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
@@ -552,9 +557,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func buildExport() -> FullEnvironmentScanModel.ExportPayload? {
-        // Snapshot anchors now (deep copy geometry lives on anchors)
+        stateLock.lock()
         let anchors = Array(meshAnchors.values)
         let frames = keyframes
+        stateLock.unlock()
+
         guard !anchors.isEmpty else { return nil }
 
         let tmp = FileManager.default.temporaryDirectory
@@ -579,25 +586,32 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
+        stateLock.lock()
         meshAnchors[mesh.identifier] = mesh
+        stateLock.unlock()
         updateViz(node: node, mesh: mesh)
-        emitStats()
+        emitStatsThrottled()
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
+        stateLock.lock()
         meshAnchors[mesh.identifier] = mesh
+        stateLock.unlock()
         updateViz(node: node, mesh: mesh)
-        emitStats()
+        emitStatsThrottled()
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
+        stateLock.lock()
         meshAnchors.removeValue(forKey: anchor.identifier)
-        emitStats()
+        stateLock.unlock()
+        emitStatsThrottled()
     }
 
     private func updateViz(node: SCNNode, mesh: ARMeshAnchor) {
         guard let geom = Self.quickGeometry(mesh.geometry) else { return }
+        // SceneKit node updates should be on main / render thread — renderer callbacks are OK
         node.geometry = geom
     }
 
@@ -655,18 +669,25 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isRunning else { return }
         let t = frame.timestamp
-        if t - lastKeyframeTime < 0.22 { return } // ~4–5 fps keyframes
+        if t - lastKeyframeTime < 0.25 { return }
         lastKeyframeTime = t
 
         guard let copied = Self.copyPixelBuffer(frame.capturedImage) else { return }
 
-        let orientation = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .first?.interfaceOrientation ?? .portrait
+        // UIKit orientation must be read on main — use portrait default if off-main
+        let orientation: UIInterfaceOrientation
+        if Thread.isMainThread {
+            orientation = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first?.interfaceOrientation ?? .portrait
+        } else {
+            orientation = .portrait
+        }
 
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
         let display = frame.displayTransform(for: orientation, viewportSize: viewport)
 
+        // ARCamera is a struct snapshot — safe to store
         let kf = PhotoTexturedMeshBuilder.Keyframe(
             camera: frame.camera,
             image: copied,
@@ -675,19 +696,43 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             displayTransform: display,
             capturedAt: t
         )
+
+        stateLock.lock()
         keyframes.append(kf)
         if keyframes.count > maxKeyframes {
-            keyframes.removeFirst(keyframes.count - maxKeyframes)
+            let overflow = keyframes.count - maxKeyframes
+            keyframes.removeFirst(overflow)
         }
-        emitStats()
+        let meshCount = meshAnchors.count
+        let frameCount = keyframes.count
+        stateLock.unlock()
+
+        emitStats(meshCount: meshCount, frameCount: frameCount)
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
-        onError?(error.localizedDescription)
+        DispatchQueue.main.async { [weak self] in
+            self?.onError?(error.localizedDescription)
+        }
     }
 
-    private func emitStats() {
-        onStats?(meshAnchors.count, keyframes.count)
+    private func emitStatsThrottled() {
+        let now = CACurrentMediaTime()
+        if now - lastStatsEmit < 0.2 { return }
+        lastStatsEmit = now
+
+        stateLock.lock()
+        let meshCount = meshAnchors.count
+        let frameCount = keyframes.count
+        stateLock.unlock()
+        emitStats(meshCount: meshCount, frameCount: frameCount)
+    }
+
+    private func emitStats(meshCount: Int, frameCount: Int) {
+        // Always hop to main — avoids UI races / bad callbacks
+        DispatchQueue.main.async { [weak self] in
+            self?.onStats?(meshCount, frameCount)
+        }
     }
 
     private static func copyPixelBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
