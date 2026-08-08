@@ -374,6 +374,11 @@ struct FullEnvironmentScanView: View {
             return
         }
         model.phase = .saving
+        // Ensure scn is on disk (Review may have shown before write finished)
+        let scnURL = payload.directory.appendingPathComponent(payload.fileName)
+        if !FileManager.default.fileExists(atPath: scnURL.path), let scene = payload.scene {
+            _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
+        }
         do {
             _ = try store.saveFullEnvironment(
                 name: name.trimmingCharacters(in: .whitespacesAndNewlines),
