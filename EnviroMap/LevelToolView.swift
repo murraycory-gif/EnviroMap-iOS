@@ -29,8 +29,8 @@ struct LevelToolView: View {
                 // Back — top left only (no grey bar)
                 backButton
                     .position(
-                        x: max(geo.safeAreaInsets.leading, 12) + 22,
-                        y: max(geo.safeAreaInsets.top, 12) + 22
+                        x: max(geo.safeAreaInsets.leading, 16) + 28,
+                        y: max(geo.safeAreaInsets.top, 16) + 28
                     )
             }
         }
@@ -60,12 +60,15 @@ struct LevelToolView: View {
             Image(systemName: "chevron.left")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
+                .frame(width: 46, height: 46)
                 .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
+                .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
+                .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Back")
+        // Keep full hit target clear of screen edge / Dynamic Island
+        .padding(4)
     }
 
     // MARK: - Portrait chrome (around center HUD)
@@ -74,7 +77,7 @@ struct LevelToolView: View {
         VStack(spacing: 0) {
             // Top: modes centered under safe area
             modeChips
-                .padding(.top, safe.top + 56)
+                .padding(.top, safe.top + 64)
 
             Spacer()
 
@@ -139,7 +142,8 @@ struct LevelToolView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: 210, alignment: .leading)
                 }
-                .padding(.leading, max(safe.leading, 16) + 52) // clear of back button
+                .padding(.leading, max(safe.leading, 20) + 64) // clear of back button + breathing room
+                .padding(.top, 8)
                 .frame(maxHeight: .infinity, alignment: .center)
 
                 Spacer()
@@ -149,7 +153,7 @@ struct LevelToolView: View {
             HStack {
                 Spacer()
                 modeChipsVertical
-                    .padding(.trailing, max(safe.trailing, 16))
+                    .padding(.trailing, max(safe.trailing, 20) + 8)
             }
         }
         .frame(width: size.width, height: size.height)
