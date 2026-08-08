@@ -5,9 +5,7 @@ import UIKit
 import simd
 import CoreVideo
 
-/// Builds a dense LiDAR mesh with real camera colors.
-/// Strategy: sample RGB from stored keyframe images → byte vertex colors →
-/// export as .scn (USDZ often strips vertex colors).
+/// Dense LiDAR mesh + real camera photo textures (per-chunk best-view bake).
 enum PhotoTexturedMeshBuilder {
 
     struct Keyframe {
@@ -16,10 +14,11 @@ enum PhotoTexturedMeshBuilder {
         let viewport: CGSize
         let displayTransform: CGAffineTransform
         let capturedAt: TimeInterval
-        /// Downscaled RGB (3 bytes/pixel) for reliable sampling
         let rgb: [UInt8]
         let rgbWidth: Int
         let rgbHeight: Int
+        /// Cached UIImage for material diffuse
+        let image: UIImage
     }
 
     // MARK: - Export
@@ -31,15 +30,10 @@ enum PhotoTexturedMeshBuilder {
         name: String = "room_full.scn"
     ) -> String? {
         guard let scene = makeScene(chunks: chunks, keyframes: keyframes) else { return nil }
-        // Prefer .scn — preserves vertex colors; USDZ often becomes white
         let scnName = name.hasSuffix(".scn") ? name : "room_full.scn"
         let scnURL = directory.appendingPathComponent(scnName)
         if scene.write(to: scnURL, options: nil, delegate: nil, progressHandler: nil) {
             return scnName
-        }
-        let usdzURL = directory.appendingPathComponent("room_full.usdz")
-        if scene.write(to: usdzURL, options: nil, delegate: nil, progressHandler: nil) {
-            return "room_full.usdz"
         }
         return nil
     }
@@ -51,60 +45,77 @@ enum PhotoTexturedMeshBuilder {
         guard !chunks.isEmpty else { return nil }
 
         let scene = SCNScene()
-        scene.background.contents = UIColor(red: 0.94, green: 0.95, blue: 0.98, alpha: 1)
+        scene.background.contents = UIColor(red: 0.93, green: 0.94, blue: 0.97, alpha: 1)
 
         var any = false
         for chunk in chunks {
-            if let node = makeNode(chunk: chunk, keyframes: keyframes) {
+            if let node = makeTexturedNode(chunk: chunk, keyframes: keyframes) {
                 scene.rootNode.addChildNode(node)
                 any = true
             }
         }
         guard any else { return nil }
 
-        // Bright ambient so baked colors read true
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.intensity = 1400
+        ambient.light?.intensity = 1200
         ambient.light?.color = UIColor.white
         scene.rootNode.addChildNode(ambient)
-
-        let key = SCNNode()
-        key.light = SCNLight()
-        key.light?.type = .directional
-        key.light?.intensity = 350
-        key.eulerAngles = SCNVector3(Float(-0.55), Float(0.4), Float(0))
-        scene.rootNode.addChildNode(key)
 
         let cam = SCNNode()
         cam.camera = SCNCamera()
         cam.camera?.fieldOfView = 60
-        cam.camera?.wantsHDR = false
         cam.camera?.zNear = 0.01
         cam.camera?.zFar = 80
-        cam.position = SCNVector3(Float(2.0), Float(1.4), Float(2.8))
-        cam.eulerAngles = SCNVector3(Float(-0.25), Float(0.45), Float(0))
+        cam.position = SCNVector3(Float(2.0), Float(1.5), Float(2.8))
+        cam.eulerAngles = SCNVector3(Float(-0.28), Float(0.5), Float(0))
         scene.rootNode.addChildNode(cam)
 
         return scene
     }
 
-    // MARK: - Node / geometry
+    // MARK: - Photo-textured node (real colors)
 
-    private static func makeNode(chunk: CapturedMeshChunk, keyframes: [Keyframe]) -> SCNNode? {
+    private static func makeTexturedNode(
+        chunk: CapturedMeshChunk,
+        keyframes: [Keyframe]
+    ) -> SCNNode? {
         let vCount = chunk.positions.count
-        guard vCount > 0, chunk.indices.count >= 3 else { return nil }
-
-        var positions = [Float](repeating: 0, count: vCount * 3)
-        var normals = [Float](repeating: 0, count: vCount * 3)
-        var colorBytes = [UInt8](repeating: 200, count: vCount * 4)
-
-        var sumR: Float = 0, sumG: Float = 0, sumB: Float = 0
-        var hitCount = 0
+        guard vCount > 0, chunk.indices.count >= 3, !keyframes.isEmpty else { return nil }
 
         let transform = chunk.transform
 
+        // Chunk center in world space
+        var center = SIMD3<Float>(0, 0, 0)
+        for p in chunk.positions {
+            let w = transform * SIMD4<Float>(p.x, p.y, p.z, 1)
+            center += SIMD3<Float>(w.x, w.y, w.z)
+        }
+        center /= Float(vCount)
+
+        // Average normal
+        var avgN = SIMD3<Float>(0, 1, 0)
+        if !chunk.normals.isEmpty {
+            avgN = .zero
+            for n in chunk.normals {
+                let wn = transform * SIMD4<Float>(n.x, n.y, n.z, 0)
+                avgN += SIMD3<Float>(wn.x, wn.y, wn.z)
+            }
+            avgN = simd_normalize(avgN)
+        }
+
+        guard let bestKF = bestKeyframe(for: center, normal: avgN, keyframes: keyframes) else {
+            return solidColorNode(chunk: chunk, color: UIColor(white: 0.7, alpha: 1))
+        }
+
+        // Build positions + UVs projected into best keyframe photo
+        var positions = [Float](repeating: 0, count: vCount * 3)
+        var normals = [Float](repeating: 0, count: vCount * 3)
+        var uvs = [Float](repeating: 0.5, count: vCount * 2)
+        var colorBytes = [UInt8](repeating: 180, count: vCount * 4)
+
+        var uvHits = 0
         for i in 0..<vCount {
             let local = chunk.positions[i]
             positions[i * 3] = local.x
@@ -118,37 +129,43 @@ enum PhotoTexturedMeshBuilder {
 
             let world4 = transform * SIMD4<Float>(local.x, local.y, local.z, 1)
             let world = SIMD3<Float>(world4.x, world4.y, world4.z)
-            let n4 = transform * SIMD4<Float>(nLocal.x, nLocal.y, nLocal.z, 0)
-            let nWorld = simd_normalize(SIMD3<Float>(n4.x, n4.y, n4.z))
 
-            let rgb = sampleColor(world: world, normal: nWorld, keyframes: keyframes)
-            colorBytes[i * 4 + 0] = rgb.0
-            colorBytes[i * 4 + 1] = rgb.1
-            colorBytes[i * 4 + 2] = rgb.2
-            colorBytes[i * 4 + 3] = 255
-
-            sumR += Float(rgb.0)
-            sumG += Float(rgb.1)
-            sumB += Float(rgb.2)
-            hitCount += 1
+            if let (u, v, r, g, b) = projectSample(world: world, kf: bestKF) {
+                uvs[i * 2] = u
+                uvs[i * 2 + 1] = 1.0 - v // flip V for SceneKit
+                colorBytes[i * 4] = r
+                colorBytes[i * 4 + 1] = g
+                colorBytes[i * 4 + 2] = b
+                colorBytes[i * 4 + 3] = 255
+                uvHits += 1
+            } else if let (r, g, b) = sampleNearestRGB(world: world, keyframes: keyframes) {
+                colorBytes[i * 4] = r
+                colorBytes[i * 4 + 1] = g
+                colorBytes[i * 4 + 2] = b
+                colorBytes[i * 4 + 3] = 255
+            }
         }
 
-        let posData = positions.withUnsafeBufferPointer { Data(buffer: $0) }
-        let nrmData = normals.withUnsafeBufferPointer { Data(buffer: $0) }
+        let posData = floatData(positions)
+        let nrmData = floatData(normals)
+        let uvData = floatData(uvs)
         let colData = colorBytes.withUnsafeBufferPointer { Data(buffer: $0) }
 
         let sources: [SCNGeometrySource] = [
             SCNGeometrySource(
                 data: posData, semantic: .vertex, vectorCount: vCount,
                 usesFloatComponents: true, componentsPerVector: 3,
-                bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0,
-                dataStride: MemoryLayout<Float>.size * 3
+                bytesPerComponent: 4, dataOffset: 0, dataStride: 12
             ),
             SCNGeometrySource(
                 data: nrmData, semantic: .normal, vectorCount: vCount,
                 usesFloatComponents: true, componentsPerVector: 3,
-                bytesPerComponent: MemoryLayout<Float>.size, dataOffset: 0,
-                dataStride: MemoryLayout<Float>.size * 3
+                bytesPerComponent: 4, dataOffset: 0, dataStride: 12
+            ),
+            SCNGeometrySource(
+                data: uvData, semantic: .texcoord, vectorCount: vCount,
+                usesFloatComponents: true, componentsPerVector: 2,
+                bytesPerComponent: 4, dataOffset: 0, dataStride: 8
             ),
             SCNGeometrySource(
                 data: colData, semantic: .color, vectorCount: vCount,
@@ -163,64 +180,73 @@ enum PhotoTexturedMeshBuilder {
         let iData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
         let element = SCNGeometryElement(
             data: iData, primitiveType: .triangles,
-            primitiveCount: primCount, bytesPerIndex: MemoryLayout<UInt32>.size
+            primitiveCount: primCount, bytesPerIndex: 4
         )
 
         let geom = SCNGeometry(sources: sources, elements: [element])
+        let mat = SCNMaterial()
+        mat.lightingModel = .constant
+        mat.isDoubleSided = true
+        mat.writesToDepthBuffer = true
 
-        // Average chunk color — used as diffuse so export can't go pure white
-        let avg: UIColor
-        if hitCount > 0 {
-            avg = UIColor(
-                red: CGFloat(sumR / Float(hitCount) / 255),
-                green: CGFloat(sumG / Float(hitCount) / 255),
-                blue: CGFloat(sumB / Float(hitCount) / 255),
-                alpha: 1
-            )
+        // Photo texture when UVs landed; else solid average vertex color
+        if uvHits > vCount / 10 {
+            mat.diffuse.contents = bestKF.image
+            mat.diffuse.wrapS = .clamp
+            mat.diffuse.wrapT = .clamp
+            mat.diffuse.magnificationFilter = .linear
+            mat.diffuse.minificationFilter = .linear
         } else {
-            avg = UIColor(white: 0.75, alpha: 1)
+            mat.diffuse.contents = averageUIColor(colorBytes: colorBytes, count: vCount)
         }
 
-        let mat = SCNMaterial()
-        mat.lightingModel = .constant   // unlit = show color as-is
-        mat.isDoubleSided = true
-        mat.diffuse.contents = avg
-        // Multiply vertex colors: SceneKit constant + vertex color source
-        // Use emission with average as base; vertex colors via diffuse white + color source
-        mat.diffuse.contents = UIColor.white
-        mat.emission.contents = avg.withAlphaComponent(0.15)
-        mat.ambient.contents = UIColor.white
-        mat.locksAmbientWithDiffuse = true
-        // Prefer true vertex colors when the viewer supports them
-        mat.writesToDepthBuffer = true
         geom.materials = [mat]
-
-        // Attach average color for viewers that strip vertex colors
         let node = SCNNode(geometry: geom)
         node.simdTransform = transform
-        node.name = "mesh-\(chunk.id.uuidString.prefix(8))"
-        // Second pass material: if vertex colors fail, still tinted
-        // Create child overlay? Skip — instead set diffuse to avg AND keep color source
-        mat.diffuse.contents = avg
         return node
     }
 
-    // MARK: - Sampling
+    private static func solidColorNode(chunk: CapturedMeshChunk, color: UIColor) -> SCNNode? {
+        let vCount = chunk.positions.count
+        guard vCount > 0 else { return nil }
+        var positions = [Float](repeating: 0, count: vCount * 3)
+        for i in 0..<vCount {
+            positions[i * 3] = chunk.positions[i].x
+            positions[i * 3 + 1] = chunk.positions[i].y
+            positions[i * 3 + 2] = chunk.positions[i].z
+        }
+        let posData = floatData(positions)
+        let src = SCNGeometrySource(
+            data: posData, semantic: .vertex, vectorCount: vCount,
+            usesFloatComponents: true, componentsPerVector: 3,
+            bytesPerComponent: 4, dataOffset: 0, dataStride: 12
+        )
+        var idx = chunk.indices
+        let prim = idx.count / 3
+        guard prim > 0 else { return nil }
+        let iData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
+        let el = SCNGeometryElement(data: iData, primitiveType: .triangles, primitiveCount: prim, bytesPerIndex: 4)
+        let geom = SCNGeometry(sources: [src], elements: [el])
+        let mat = SCNMaterial()
+        mat.lightingModel = .constant
+        mat.isDoubleSided = true
+        mat.diffuse.contents = color
+        geom.materials = [mat]
+        let n = SCNNode(geometry: geom)
+        n.simdTransform = chunk.transform
+        return n
+    }
 
-    /// Returns 0–255 RGB
-    private static func sampleColor(
-        world: SIMD3<Float>,
+    // MARK: - Projection / sampling
+
+    private static func bestKeyframe(
+        for world: SIMD3<Float>,
         normal: SIMD3<Float>,
         keyframes: [Keyframe]
-    ) -> (UInt8, UInt8, UInt8) {
-        guard !keyframes.isEmpty else {
-            return fallback(y: world.y)
-        }
-
-        var best: (UInt8, UInt8, UInt8)?
+    ) -> Keyframe? {
+        var best: Keyframe?
         var bestScore: Float = -1
-
-        for kf in keyframes.reversed() { // prefer recent
+        for kf in keyframes {
             let camPos = SIMD3<Float>(
                 kf.camera.transform.columns.3.x,
                 kf.camera.transform.columns.3.y,
@@ -228,94 +254,115 @@ enum PhotoTexturedMeshBuilder {
             )
             let toCam = camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.05 || dist > 10 { continue }
-
-            let facing = simd_dot(normal, toCam / max(dist, 0.001))
-            // Allow backfaces a little for thin objects
-            if facing < -0.2 { continue }
-
-            guard let rgb = samplePixel(world: world, kf: kf) else { continue }
-            let score = max(facing, 0.05) * (1.5 / max(dist, 0.2))
+            if dist < 0.05 || dist > 12 { continue }
+            let facing = simd_dot(normal, toCam / dist)
+            if facing < 0.0 { continue }
+            let score = facing * (2.0 / max(dist, 0.3))
             if score > bestScore {
                 bestScore = score
-                best = rgb
+                best = kf
             }
-            // Early out if excellent sample
-            if bestScore > 2.0 { break }
         }
-
-        return best ?? fallback(y: world.y)
+        // Fallback: nearest keyframe by distance
+        if best == nil {
+            best = keyframes.min(by: {
+                let a = SIMD3<Float>($0.camera.transform.columns.3.x, $0.camera.transform.columns.3.y, $0.camera.transform.columns.3.z)
+                let b = SIMD3<Float>($1.camera.transform.columns.3.x, $1.camera.transform.columns.3.y, $1.camera.transform.columns.3.z)
+                return simd_distance(a, world) < simd_distance(b, world)
+            })
+        }
+        return best
     }
 
-    private static func samplePixel(world: SIMD3<Float>, kf: Keyframe) -> (UInt8, UInt8, UInt8)? {
-        // View-space depth check
+    /// Returns u,v in 0…1 plus RGB sample
+    private static func projectSample(
+        world: SIMD3<Float>,
+        kf: Keyframe
+    ) -> (Float, Float, UInt8, UInt8, UInt8)? {
         let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-        if view.z >= 0 { return nil } // behind camera
+        if view.z >= 0 { return nil }
 
         let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
         if !projected.x.isFinite || !projected.y.isFinite { return nil }
 
-        // Normalized viewport [0,1]
         let nx = projected.x / max(kf.viewport.width, 1)
         let ny = projected.y / max(kf.viewport.height, 1)
-        if nx < -0.05 || nx > 1.05 || ny < -0.05 || ny > 1.05 { return nil }
+        if nx < 0 || nx > 1 || ny < 0 || ny > 1 { return nil }
 
-        // View → image UV via inverted display transform
-        let viewPt = CGPoint(x: min(max(nx, 0), 1), y: min(max(ny, 0), 1))
-        let imgUV = viewPt.applying(kf.displayTransform.inverted())
+        // View normalized → image UV
+        let img = CGPoint(x: nx, y: ny).applying(kf.displayTransform.inverted())
+        var u = Float(img.x)
+        var v = Float(img.y)
 
-        // Also try direct mapping if transform puts us outside
-        var u = imgUV.x
-        var v = imgUV.y
+        // If outside, try raw nx,ny (some devices)
         if u < 0 || u > 1 || v < 0 || v > 1 {
-            // Fallback: assume projectPoint already in image-like space
-            u = nx
-            v = ny
+            u = Float(nx)
+            v = Float(ny)
         }
         if u < 0 || u > 1 || v < 0 || v > 1 { return nil }
 
-        let w = kf.rgbWidth
-        let h = kf.rgbHeight
-        guard w > 1, h > 1, !kf.rgb.isEmpty else { return nil }
+        let (r, g, b) = rgbAt(u: u, v: v, kf: kf)
+        return (u, v, r, g, b)
+    }
 
-        let px = min(max(Int(u * CGFloat(w - 1)), 0), w - 1)
-        let py = min(max(Int(v * CGFloat(h - 1)), 0), h - 1)
-
-        // 3×3 average
-        var r = 0, g = 0, b = 0, n = 0
-        for dy in -1...1 {
-            for dx in -1...1 {
-                let x = min(max(px + dx, 0), w - 1)
-                let y = min(max(py + dy, 0), h - 1)
-                let i = (y * w + x) * 3
-                guard i + 2 < kf.rgb.count else { continue }
-                r += Int(kf.rgb[i])
-                g += Int(kf.rgb[i + 1])
-                b += Int(kf.rgb[i + 2])
-                n += 1
+    private static func sampleNearestRGB(
+        world: SIMD3<Float>,
+        keyframes: [Keyframe]
+    ) -> (UInt8, UInt8, UInt8)? {
+        for kf in keyframes.reversed() {
+            if let s = projectSample(world: world, kf: kf) {
+                return (s.2, s.3, s.4)
             }
         }
-        guard n > 0 else { return nil }
-        return (UInt8(r / n), UInt8(g / n), UInt8(b / n))
+        // Last resort: center pixel of latest keyframe (always real camera color)
+        if let kf = keyframes.last {
+            return rgbAt(u: 0.5, v: 0.5, kf: kf)
+        }
+        return nil
     }
 
-    private static func fallback(y: Float) -> (UInt8, UInt8, UInt8) {
-        if y < 0.15 { return (120, 100, 80) }   // floor brown
-        if y > 2.2 { return (230, 230, 235) }  // ceiling
-        return (180, 185, 190)                 // wall gray-blue
+    private static func rgbAt(u: Float, v: Float, kf: Keyframe) -> (UInt8, UInt8, UInt8) {
+        let w = kf.rgbWidth
+        let h = kf.rgbHeight
+        guard w > 0, h > 0, !kf.rgb.isEmpty else { return (200, 200, 200) }
+        let x = min(max(Int(u * Float(w - 1)), 0), w - 1)
+        let y = min(max(Int(v * Float(h - 1)), 0), h - 1)
+        let i = (y * w + x) * 3
+        guard i + 2 < kf.rgb.count else { return (200, 200, 200) }
+        return (kf.rgb[i], kf.rgb[i + 1], kf.rgb[i + 2])
     }
 
-    // MARK: - Keyframe RGB extraction
+    private static func averageUIColor(colorBytes: [UInt8], count: Int) -> UIColor {
+        guard count > 0 else { return UIColor(white: 0.7, alpha: 1) }
+        var r = 0, g = 0, b = 0
+        for i in 0..<count {
+            r += Int(colorBytes[i * 4])
+            g += Int(colorBytes[i * 4 + 1])
+            b += Int(colorBytes[i * 4 + 2])
+        }
+        return UIColor(
+            red: CGFloat(r) / CGFloat(count) / 255,
+            green: CGFloat(g) / CGFloat(count) / 255,
+            blue: CGFloat(b) / CGFloat(count) / 255,
+            alpha: 1
+        )
+    }
 
-    /// Build a Keyframe with downscaled RGB from ARFrame (call on capture).
+    private static func floatData(_ values: [Float]) -> Data {
+        values.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
+    // MARK: - Keyframe from ARFrame
+
     static func makeKeyframe(
         from frame: ARFrame,
         orientation: UIInterfaceOrientation,
         viewport: CGSize,
-        maxWidth: Int = 320
+        maxWidth: Int = 480
     ) -> Keyframe? {
         let buffer = frame.capturedImage
         guard let (rgb, w, h) = extractRGB(buffer: buffer, maxWidth: maxWidth) else { return nil }
+        guard let image = uiImage(rgb: rgb, width: w, height: h) else { return nil }
         let display = frame.displayTransform(for: orientation, viewportSize: viewport)
         return Keyframe(
             camera: frame.camera,
@@ -325,8 +372,31 @@ enum PhotoTexturedMeshBuilder {
             capturedAt: frame.timestamp,
             rgb: rgb,
             rgbWidth: w,
-            rgbHeight: h
+            rgbHeight: h,
+            image: image
         )
+    }
+
+    private static func uiImage(rgb: [UInt8], width: Int, height: Int) -> UIImage? {
+        // RGB → RGBA CGImage
+        var rgba = [UInt8](repeating: 255, count: width * height * 4)
+        for i in 0..<(width * height) {
+            rgba[i * 4] = rgb[i * 3]
+            rgba[i * 4 + 1] = rgb[i * 3 + 1]
+            rgba[i * 4 + 2] = rgb[i * 3 + 2]
+            rgba[i * 4 + 3] = 255
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &rgba,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: cs,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let cg = ctx.makeImage() else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     private static func extractRGB(buffer: CVPixelBuffer, maxWidth: Int) -> ([UInt8], Int, Int)? {
@@ -357,28 +427,16 @@ enum PhotoTexturedMeshBuilder {
                 for i in 0..<w {
                     let sx = min(Int(CGFloat(i) / scale), fullW - 1)
                     let Y = Float(yBase.advanced(by: sy * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
-                    let cx = sx / 2
-                    let cy = sy / 2
-                    let cPtr = cBase.advanced(by: cy * cStride + cx * 2).assumingMemoryBound(to: UInt8.self)
+                    let cPtr = cBase.advanced(by: (sy / 2) * cStride + (sx / 2) * 2).assumingMemoryBound(to: UInt8.self)
                     let Cb = Float(cPtr[0]) - 128
                     let Cr = Float(cPtr[1]) - 128
                     let yf = videoRange ? (Y - 16) * (255.0 / 219.0) : Y
                     var r = yf + 1.402 * Cr
                     var g = yf - 0.344136 * Cb - 0.714136 * Cr
                     var b = yf + 1.772 * Cb
-                    r = min(max(r, 0), 255)
-                    g = min(max(g, 0), 255)
-                    b = min(max(b, 0), 255)
-                    // Slight saturation boost
-                    let gray = (r + g + b) / 3
-                    let sat: Float = 1.15
-                    r = min(max(gray + (r - gray) * sat, 0), 255)
-                    g = min(max(gray + (g - gray) * sat, 0), 255)
-                    b = min(max(gray + (b - gray) * sat, 0), 255)
+                    r = min(max(r, 0), 255); g = min(max(g, 0), 255); b = min(max(b, 0), 255)
                     let o = (j * w + i) * 3
-                    rgb[o] = UInt8(r)
-                    rgb[o + 1] = UInt8(g)
-                    rgb[o + 2] = UInt8(b)
+                    rgb[o] = UInt8(r); rgb[o + 1] = UInt8(g); rgb[o + 2] = UInt8(b)
                 }
             }
             return (rgb, w, h)
@@ -393,14 +451,11 @@ enum PhotoTexturedMeshBuilder {
                     let sx = min(Int(CGFloat(i) / scale), fullW - 1)
                     let p = base.advanced(by: sy * stride + sx * 4).assumingMemoryBound(to: UInt8.self)
                     let o = (j * w + i) * 3
-                    rgb[o] = p[2]
-                    rgb[o + 1] = p[1]
-                    rgb[o + 2] = p[0]
+                    rgb[o] = p[2]; rgb[o + 1] = p[1]; rgb[o + 2] = p[0]
                 }
             }
             return (rgb, w, h)
         }
-
         return nil
     }
 }

@@ -99,6 +99,24 @@ struct FullEnvironmentScanView: View {
                 .frame(maxWidth: .infinity)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
+            // Live capture status
+            if model.phase == .scanning {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 10, height: 10)
+                    Text(model.meshChunks > 0
+                         ? "Capturing… \(model.meshChunks) surfaces saved"
+                         : "Point at a surface to start capturing")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Color.black.opacity(0.45), in: Capsule())
+            }
+
             HStack(spacing: 10) {
                 metric("Mesh", "\(model.meshChunks)")
                 metric("Coverage", model.coverageLabel)
@@ -376,13 +394,10 @@ struct PreviewMeshView: UIViewRepresentable {
                 scene.rootNode.enumerateChildNodes { node, _ in
                     guard let geos = node.geometry else { return }
                     for mat in geos.materials {
-                        // Keep baked diffuse color; unlit so it doesn't wash to white
                         mat.lightingModel = .constant
                         mat.isDoubleSided = true
                         mat.shaderModifiers = [:]
-                        if mat.diffuse.contents == nil {
-                            mat.diffuse.contents = UIColor(white: 0.8, alpha: 1)
-                        }
+                        // Do NOT force white — keep photo textures / colors
                     }
                 }
                 let amb = SCNNode()
@@ -439,7 +454,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Slowly circle each object up close. Mesh count should climb. Cover tops, sides, and floor."
+        instruction = "Yellow dots = tracking. Mesh number rises as surfaces are saved. Get close and circle each item."
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
@@ -523,8 +538,10 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 64
-    private let maxChunks = 400
+    private let maxKeyframes = 80
+    private let maxChunks = 600
+    private var coverageRoot: SCNNode?
+    private var lastMarkerUpdate: TimeInterval = 0
 
     var onStats: ((Int, Int) -> Void)?
     var onError: ((String) -> Void)?
@@ -539,10 +556,15 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         scn.session.delegate = self
         scn.automaticallyUpdatesLighting = true
         scn.scene = SCNScene()
-        // No custom mesh overlay during capture
         scn.rendersCameraGrain = false
+        // Yellow feature points = live proof of tracking / capture
+        scn.debugOptions = [.showFeaturePoints]
         view.addSubview(scn)
         arView = scn
+        let root = SCNNode()
+        root.name = "coverageRoot"
+        scn.scene.rootNode.addChildNode(root)
+        coverageRoot = root
     }
 
     func start() {
@@ -558,7 +580,11 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         lastKeyframeTime = 0
         lastMeshCopyTime = 0
         lastStatsEmit = 0
+        lastMarkerUpdate = 0
         stateLock.unlock()
+        DispatchQueue.main.async { [weak self] in
+            self?.coverageRoot?.childNodes.forEach { $0.removeFromParentNode() }
+        }
 
         let config = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
@@ -626,13 +652,13 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         let t = frame.timestamp
 
         // Copy mesh from frame anchors (throttled) — safe snapshot
-        if t - lastMeshCopyTime >= 0.18 {
+        if t - lastMeshCopyTime >= 0.12 {
             lastMeshCopyTime = t
             ingestMeshes(from: frame)
         }
 
         // Color keyframes (throttled)
-        if t - lastKeyframeTime >= 0.20 {
+        if t - lastKeyframeTime >= 0.16 {
             lastKeyframeTime = t
             ingestKeyframe(from: frame)
         }
@@ -673,6 +699,48 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         stateLock.unlock()
 
         emitStats(meshCount: meshCount, frameCount: frameCount)
+        updateCoverageMarkersIfNeeded()
+    }
+
+    /// Lightweight dots so user SEES capture progress (not heavy wireframe).
+    private func updateCoverageMarkersIfNeeded() {
+        let now = CACurrentMediaTime()
+        if now - lastMarkerUpdate < 0.6 { return }
+        lastMarkerUpdate = now
+
+        stateLock.lock()
+        let snapshot = Array(chunks.values)
+        stateLock.unlock()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let root = self.coverageRoot else { return }
+            root.childNodes.forEach { $0.removeFromParentNode() }
+
+            // Show up to 80 markers for performance
+            let step = max(1, snapshot.count / 80)
+            var i = 0
+            while i < snapshot.count {
+                let c = snapshot[i]
+                // World-space center
+                var center = SIMD3<Float>(0, 0, 0)
+                let n = max(c.positions.count, 1)
+                for p in c.positions {
+                    let w = c.transform * SIMD4<Float>(p.x, p.y, p.z, 1)
+                    center += SIMD3<Float>(w.x, w.y, w.z)
+                }
+                center /= Float(n)
+
+                let sphere = SCNSphere(radius: 0.025)
+                let mat = SCNMaterial()
+                mat.lightingModel = .constant
+                mat.diffuse.contents = UIColor(red: 0.15, green: 0.75, blue: 1.0, alpha: 0.95)
+                sphere.materials = [mat]
+                let node = SCNNode(geometry: sphere)
+                node.simdPosition = center
+                root.addChildNode(node)
+                i += step
+            }
+        }
     }
 
     private func ingestKeyframe(from frame: ARFrame) {
@@ -682,7 +750,7 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
             from: frame,
             orientation: orientation,
             viewport: viewport,
-            maxWidth: 360
+            maxWidth: 512
         ) else { return }
 
         stateLock.lock()
