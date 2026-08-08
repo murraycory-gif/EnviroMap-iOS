@@ -183,9 +183,9 @@ enum PhotoTexturedMeshBuilder {
         // Convert float colors → byte RGBA for SceneKit reliability
         var bytes = [UInt8](repeating: 0, count: vCount * 4)
         for i in 0..<vCount {
-            bytes[i * 4 + 0] = UInt8(min(max(colors[i * 4 + 0] * 255, 0), 255))
-            bytes[i * 4 + 1] = UInt8(min(max(colors[i * 4 + 1] * 255, 0), 255))
-            bytes[i * 4 + 2] = UInt8(min(max(colors[i * 4 + 2] * 255, 0), 255))
+            bytes[i * 4 + 0] = UInt8(clamping: Int(max(0, min(255, colors[i * 4 + 0] * 255))))
+            bytes[i * 4 + 1] = UInt8(clamping: Int(max(0, min(255, colors[i * 4 + 1] * 255))))
+            bytes[i * 4 + 2] = UInt8(clamping: Int(max(0, min(255, colors[i * 4 + 2] * 255))))
             bytes[i * 4 + 3] = 255
         }
 
@@ -272,10 +272,13 @@ enum PhotoTexturedMeshBuilder {
         let sources: [SCNGeometrySource] = [
             source(positions, semantic: .vertex, components: 3, count: vCount),
             source(normalsArr, semantic: .normal, components: 3, count: vCount),
-            colorSourceBytes({ () -> [UInt8] in
+            colorSourceBytes({
             var b = [UInt8](repeating: 0, count: vCount * 4)
             for i in 0..<vCount {
-                b[i*4]=UInt8(min(max(colors[i*4]*255,0),255)); b[i*4+1]=UInt8(min(max(colors[i*4+1]*255,0),255)); b[i*4+2]=UInt8(min(max(colors[i*4+2]*255,0),255)); b[i*4+3]=255
+                b[i * 4 + 0] = UInt8(clamping: Int(max(0, min(255, colors[i * 4 + 0] * 255))))
+                b[i * 4 + 1] = UInt8(clamping: Int(max(0, min(255, colors[i * 4 + 1] * 255))))
+                b[i * 4 + 2] = UInt8(clamping: Int(max(0, min(255, colors[i * 4 + 2] * 255))))
+                b[i * 4 + 3] = 255
             }
             return b
         }(), count: vCount),
