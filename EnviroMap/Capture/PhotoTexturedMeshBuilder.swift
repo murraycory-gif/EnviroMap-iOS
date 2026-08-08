@@ -5,8 +5,8 @@ import UIKit
 import simd
 import CoreVideo
 
-/// Builds colored LiDAR mesh using a **color atlas texture** (always visible).
-/// File export embeds PNG on disk so colors survive reload.
+/// Colored LiDAR mesh using **solid materials per color group** (no fragile UVs).
+/// Every triangle gets a real camera color — cannot export as pure white.
 enum PhotoTexturedMeshBuilder {
 
     struct Keyframe {
@@ -20,187 +20,101 @@ enum PhotoTexturedMeshBuilder {
         let rgbHeight: Int
     }
 
-    struct BuildResult {
-        let scene: SCNScene
-        let fileName: String // relative name written into directory
-    }
+    // MARK: - Export
 
-    // MARK: - Public export
-
-    /// Builds scene + writes `room_full.scn` and `atlas.png` into directory.
     static func exportChunks(
         _ chunks: [CapturedMeshChunk],
         keyframes: [Keyframe],
         to directory: URL,
         name: String = "room_full.scn"
     ) -> String? {
-        guard let built = build(chunks: chunks, keyframes: keyframes, directory: directory) else {
-            return nil
+        guard let scene = makeScene(chunks: chunks, keyframes: keyframes) else { return nil }
+
+        // Also write a color proof PNG so we can verify bake worked
+        if let proof = proofImage(from: keyframes) {
+            try? proof.pngData()?.write(to: directory.appendingPathComponent("color_proof.png"))
         }
-        return built.fileName
+
+        let url = directory.appendingPathComponent(name.hasSuffix(".scn") ? name : "room_full.scn")
+        if scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) {
+            return url.lastPathComponent
+        }
+        return nil
     }
 
-    /// In-memory scene for instant colored preview (no disk round-trip).
     static func makeScene(
         chunks: [CapturedMeshChunk],
         keyframes: [Keyframe]
     ) -> SCNScene? {
-        build(chunks: chunks, keyframes: keyframes, directory: nil)?.scene
-    }
-
-    // MARK: - Core builder
-
-    private static func build(
-        chunks: [CapturedMeshChunk],
-        keyframes: [Keyframe],
-        directory: URL?
-    ) -> BuildResult? {
         guard !chunks.isEmpty else { return nil }
 
-        // Flatten all triangles with sampled colors
-        var allPositions: [SIMD3<Float>] = []
-        var allNormals: [SIMD3<Float>] = []
-        var allColors: [(UInt8, UInt8, UInt8)] = [] // per-vertex after expansion
-        var allUVs: [SIMD2<Float>] = []
-        var allIndices: [UInt32] = []
-
-        // Atlas: each triangle gets a 2x2 pixel block of solid color
-        // Max triangles budget for atlas size
-        var triangleColors: [(UInt8, UInt8, UInt8)] = []
+        // Group triangles by quantized camera color → one material each
+        // key: quantized color, value: world-space triangle verts (9 floats each)
+        var groups: [UInt32: [Float]] = [:]
+        var groupRGB: [UInt32: (UInt8, UInt8, UInt8)] = [:]
+        var totalTris = 0
+        var sampledTris = 0
 
         for chunk in chunks {
             let t = chunk.transform
             let vCount = chunk.positions.count
-            guard vCount > 0, chunk.indices.count >= 3 else { continue }
-
+            guard vCount > 0 else { continue }
             let triCount = chunk.indices.count / 3
+
             for ti in 0..<triCount {
                 let i0 = Int(chunk.indices[ti * 3])
                 let i1 = Int(chunk.indices[ti * 3 + 1])
                 let i2 = Int(chunk.indices[ti * 3 + 2])
                 guard i0 < vCount, i1 < vCount, i2 < vCount else { continue }
 
-                let locals = [chunk.positions[i0], chunk.positions[i1], chunk.positions[i2]]
-                var worlds: [SIMD3<Float>] = []
-                for p in locals {
+                func world(_ i: Int) -> SIMD3<Float> {
+                    let p = chunk.positions[i]
                     let w = t * SIMD4<Float>(p.x, p.y, p.z, 1)
-                    worlds.append(SIMD3(w.x, w.y, w.z))
+                    return SIMD3(w.x, w.y, w.z)
                 }
 
-                // Sample color at triangle centroid (+ try verts)
-                let centroid = (worlds[0] + worlds[1] + worlds[2]) / 3
-                var nWorld = SIMD3<Float>(0, 1, 0)
-                if i0 < chunk.normals.count {
-                    let n = chunk.normals[i0]
-                    let nw = t * SIMD4<Float>(n.x, n.y, n.z, 0)
-                    nWorld = simd_normalize(SIMD3(nw.x, nw.y, nw.z))
+                let w0 = world(i0), w1 = world(i1), w2 = world(i2)
+                let centroid = (w0 + w1 + w2) / 3
+
+                var normal = simd_normalize(simd_cross(w1 - w0, w2 - w0))
+                if normal.x.isNaN { normal = SIMD3(0, 1, 0) }
+
+                let rgb = sampleColor(world: centroid, normal: normal, keyframes: keyframes)
+                    ?? sampleColor(world: w0, normal: normal, keyframes: keyframes)
+                    ?? sampleColor(world: w1, normal: normal, keyframes: keyframes)
+                    ?? sampleColor(world: w2, normal: normal, keyframes: keyframes)
+                    ?? forcedKeyframeColor(keyframes, seed: totalTris)
+                    ?? (200, 80, 80) // visible red if everything failed — never white
+
+                totalTris += 1
+                if sampleColor(world: centroid, normal: normal, keyframes: keyframes) != nil {
+                    sampledTris += 1
                 }
 
-                let rgb = sampleColor(world: centroid, normal: nWorld, keyframes: keyframes)
-                    ?? sampleColor(world: worlds[0], normal: nWorld, keyframes: keyframes)
-                    ?? sampleColor(world: worlds[1], normal: nWorld, keyframes: keyframes)
-                    ?? averageKeyframeColor(keyframes)
-                    ?? (160, 160, 165)
-
-                let atlasIndex = triangleColors.count
-                triangleColors.append(rgb)
-
-                // UVs point at center of this triangle's atlas cell
-                let uv = atlasUV(forTriangle: atlasIndex)
-
-                let base = UInt32(allPositions.count)
-                for k in 0..<3 {
-                    // Transform to world (bake transform into positions for simpler scene)
-                    allPositions.append(worlds[k])
-                    if i0 < chunk.normals.count {
-                        let ni = [i0, i1, i2][k]
-                        let n = ni < chunk.normals.count ? chunk.normals[ni] : SIMD3<Float>(0, 1, 0)
-                        let nw = t * SIMD4<Float>(n.x, n.y, n.z, 0)
-                        allNormals.append(simd_normalize(SIMD3(nw.x, nw.y, nw.z)))
-                    } else {
-                        allNormals.append(nWorld)
-                    }
-                    allColors.append(rgb)
-                    allUVs.append(uv)
-                }
-                allIndices.append(contentsOf: [base, base + 1, base + 2])
+                let key = quantize(rgb)
+                groupRGB[key] = rgb
+                var arr = groups[key] ?? []
+                arr.append(contentsOf: [w0.x, w0.y, w0.z, w1.x, w1.y, w1.z, w2.x, w2.y, w2.z])
+                groups[key] = arr
             }
         }
 
-        guard !allPositions.isEmpty, !triangleColors.isEmpty else { return nil }
-
-        // Build atlas image
-        let atlas = makeAtlasImage(triangleColors: triangleColors)
-        guard let atlasImage = atlas else { return nil }
-
-        // Optionally write PNG for durable materials
-        var textureContents: Any = atlasImage
-        if let directory {
-            let pngURL = directory.appendingPathComponent("atlas.png")
-            if let data = atlasImage.pngData() {
-                try? data.write(to: pngURL, options: .atomic)
-                // Prefer file URL so SCN write embeds/reloads correctly
-                textureContents = pngURL.path
-            }
-        }
-
-        let vCount = allPositions.count
-        var pos = [Float](repeating: 0, count: vCount * 3)
-        var nrm = [Float](repeating: 0, count: vCount * 3)
-        var uvs = [Float](repeating: 0, count: vCount * 2)
-        var cols = [UInt8](repeating: 255, count: vCount * 4)
-
-        for i in 0..<vCount {
-            pos[i * 3] = allPositions[i].x
-            pos[i * 3 + 1] = allPositions[i].y
-            pos[i * 3 + 2] = allPositions[i].z
-            nrm[i * 3] = allNormals[i].x
-            nrm[i * 3 + 1] = allNormals[i].y
-            nrm[i * 3 + 2] = allNormals[i].z
-            uvs[i * 2] = allUVs[i].x
-            uvs[i * 2 + 1] = allUVs[i].y
-            cols[i * 4] = allColors[i].0
-            cols[i * 4 + 1] = allColors[i].1
-            cols[i * 4 + 2] = allColors[i].2
-            cols[i * 4 + 3] = 255
-        }
-
-        let sources: [SCNGeometrySource] = [
-            source(pos, semantic: .vertex, components: 3, count: vCount, float: true),
-            source(nrm, semantic: .normal, components: 3, count: vCount, float: true),
-            source(uvs, semantic: .texcoord, components: 2, count: vCount, float: true),
-            byteColorSource(cols, count: vCount),
-        ]
-
-        var idx = allIndices
-        let prim = idx.count / 3
-        let iData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
-        let element = SCNGeometryElement(
-            data: iData, primitiveType: .triangles,
-            primitiveCount: prim, bytesPerIndex: 4
-        )
-
-        let geom = SCNGeometry(sources: sources, elements: [element])
-        let mat = SCNMaterial()
-        mat.lightingModel = .constant
-        mat.isDoubleSided = true
-        mat.diffuse.contents = textureContents
-        mat.diffuse.wrapS = .clamp
-        mat.diffuse.wrapT = .clamp
-        mat.diffuse.magnificationFilter = .nearest // keep block colors crisp
-        mat.diffuse.minificationFilter = .nearest
-        mat.emission.contents = UIColor.black
-        mat.transparency = 1.0
-        geom.materials = [mat]
-
-        let node = SCNNode(geometry: geom)
-        // Already in world space
-        node.simdTransform = matrix_identity_float4x4
+        guard !groups.isEmpty else { return nil }
 
         let scene = SCNScene()
-        scene.background.contents = UIColor(red: 0.12, green: 0.13, blue: 0.16, alpha: 1)
-        scene.rootNode.addChildNode(node)
+        scene.background.contents = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
 
+        let root = SCNNode()
+        root.name = "coloredMesh"
+
+        for (key, floats) in groups {
+            let rgb = groupRGB[key] ?? (180, 180, 180)
+            guard let node = solidMeshNode(positions: floats, color: rgb) else { continue }
+            root.addChildNode(node)
+        }
+        scene.rootNode.addChildNode(root)
+
+        // Lighting that does NOT wash to white
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
@@ -208,91 +122,89 @@ enum PhotoTexturedMeshBuilder {
         ambient.light?.color = UIColor.white
         scene.rootNode.addChildNode(ambient)
 
+        // Auto-frame camera
+        let (minB, maxB) = root.boundingBox
+        let mid = SCNVector3(
+            (minB.x + maxB.x) * 0.5,
+            (minB.y + maxB.y) * 0.5,
+            (minB.z + maxB.z) * 0.5
+        )
+        let ext = max(maxB.x - minB.x, maxB.y - minB.y, maxB.z - minB.z, 0.5)
         let cam = SCNNode()
         cam.camera = SCNCamera()
-        cam.camera?.fieldOfView = 60
+        cam.camera?.fieldOfView = 55
         cam.camera?.zNear = 0.01
-        cam.camera?.zFar = 100
-        // Frame the mesh roughly
-        let bounds = node.boundingBox
-        let mid = SCNVector3(
-            (bounds.min.x + bounds.max.x) / 2,
-            (bounds.min.y + bounds.max.y) / 2,
-            (bounds.min.z + bounds.max.z) / 2
-        )
-        let ext = max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z, 1)
-        cam.position = SCNVector3(mid.x + ext * 0.9, mid.y + ext * 0.55, mid.z + ext * 1.3)
-        cam.eulerAngles = SCNVector3(Float(-0.35), Float(0.45), Float(0))
+        cam.camera?.zFar = 120
+        cam.position = SCNVector3(mid.x + ext * 0.7, mid.y + ext * 0.45, mid.z + ext * 1.1)
+        cam.eulerAngles = SCNVector3(Float(-0.3), Float(0.4), Float(0))
         scene.rootNode.addChildNode(cam)
 
-        // Write scene file if directory given
-        let fileName = "room_full.scn"
-        if let directory {
-            let url = directory.appendingPathComponent(fileName)
-            // Ensure atlas.png exists beside it
-            if scene.write(to: url, options: nil, delegate: nil, progressHandler: nil) == false {
-                // Still return scene for preview even if write fails
-            }
-        }
+        // Debug: attach sample stats on root
+        root.setValue(totalTris, forKey: "triCount")
+        root.setValue(sampledTris, forKey: "sampledTris")
+        root.setValue(groups.count, forKey: "colorGroups")
 
-        return BuildResult(scene: scene, fileName: fileName)
+        return scene
     }
 
-    // MARK: - Atlas
+    /// One solid-colored mesh for a set of triangle floats (x,y,z * 3 per tri)
+    private static func solidMeshNode(positions: [Float], color: (UInt8, UInt8, UInt8)) -> SCNNode? {
+        let vCount = positions.count / 3
+        guard vCount >= 3, vCount % 3 == 0 else { return nil }
 
-    /// 2x2 pixels per triangle in a square atlas
-    private static func atlasUV(forTriangle index: Int) -> SIMD2<Float> {
-        let cell: Int = 2
-        // Atlas side in cells
-        let grid = 512 // 512 cells → 1024 px
-        let col = index % grid
-        let row = index / grid
-        // Center of cell in 0...1
-        let u = (Float(col) + 0.5) / Float(grid)
-        let v = (Float(row) + 0.5) / Float(grid)
-        _ = cell
-        return SIMD2(u, v)
+        let posData = positions.withUnsafeBufferPointer { Data(buffer: $0) }
+        let src = SCNGeometrySource(
+            data: posData,
+            semantic: .vertex,
+            vectorCount: vCount,
+            usesFloatComponents: true,
+            componentsPerVector: 3,
+            bytesPerComponent: MemoryLayout<Float>.size,
+            dataOffset: 0,
+            dataStride: MemoryLayout<Float>.size * 3
+        )
+
+        var indices = [UInt32](repeating: 0, count: vCount)
+        for i in 0..<vCount { indices[i] = UInt32(i) }
+        let iData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
+        let element = SCNGeometryElement(
+            data: iData,
+            primitiveType: .triangles,
+            primitiveCount: vCount / 3,
+            bytesPerIndex: MemoryLayout<UInt32>.size
+        )
+
+        let geom = SCNGeometry(sources: [src], elements: [element])
+        let mat = SCNMaterial()
+        mat.lightingModel = .constant
+        mat.isDoubleSided = true
+        mat.diffuse.contents = UIColor(
+            red: CGFloat(color.0) / 255.0,
+            green: CGFloat(color.1) / 255.0,
+            blue: CGFloat(color.2) / 255.0,
+            alpha: 1
+        )
+        mat.emission.contents = UIColor(
+            red: CGFloat(color.0) / 255.0 * 0.15,
+            green: CGFloat(color.1) / 255.0 * 0.15,
+            blue: CGFloat(color.2) / 255.0 * 0.15,
+            alpha: 1
+        )
+        mat.writesToDepthBuffer = true
+        geom.materials = [mat]
+
+        return SCNNode(geometry: geom)
     }
 
-    private static func makeAtlasImage(triangleColors: [(UInt8, UInt8, UInt8)]) -> UIImage? {
-        let grid = 512
-        let cell = 2
-        let size = grid * cell // 1024
-        var rgba = [UInt8](repeating: 255, count: size * size * 4)
+    // MARK: - Color sampling
 
-        for (index, rgb) in triangleColors.enumerated() {
-            let col = index % grid
-            let row = index / grid
-            if row >= grid { break } // atlas full
-            let x0 = col * cell
-            let y0 = row * cell
-            for dy in 0..<cell {
-                for dx in 0..<cell {
-                    let x = x0 + dx
-                    let y = y0 + dy
-                    let o = (y * size + x) * 4
-                    rgba[o] = rgb.0
-                    rgba[o + 1] = rgb.1
-                    rgba[o + 2] = rgb.2
-                    rgba[o + 3] = 255
-                }
-            }
-        }
-
-        let cs = CGColorSpaceCreateDeviceRGB()
-        guard let ctx = CGContext(
-            data: &rgba,
-            width: size,
-            height: size,
-            bitsPerComponent: 8,
-            bytesPerRow: size * 4,
-            space: cs,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let cg = ctx.makeImage() else { return nil }
-        return UIImage(cgImage: cg)
+    private static func quantize(_ rgb: (UInt8, UInt8, UInt8)) -> UInt32 {
+        // 5 bits/channel → max ~32k groups, typically dozens–hundreds
+        let r = UInt32(rgb.0 >> 3)
+        let g = UInt32(rgb.1 >> 3)
+        let b = UInt32(rgb.2 >> 3)
+        return (r << 10) | (g << 5) | b
     }
-
-    // MARK: - Sampling
 
     private static func sampleColor(
         world: SIMD3<Float>,
@@ -304,7 +216,8 @@ enum PhotoTexturedMeshBuilder {
         var best: (UInt8, UInt8, UInt8)?
         var bestScore: Float = -1
 
-        for kf in keyframes.reversed() {
+        // Try all keyframes, prefer facing + close
+        for kf in keyframes {
             let camPos = SIMD3<Float>(
                 kf.camera.transform.columns.3.x,
                 kf.camera.transform.columns.3.y,
@@ -312,27 +225,37 @@ enum PhotoTexturedMeshBuilder {
             )
             let toCam = camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.05 || dist > 15 { continue }
+            if dist < 0.03 || dist > 20 { continue }
 
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-            if view.z >= 0 { continue }
+            // ARKit camera looks down -Z; in front ⇒ z < 0
+            if view.z > -0.01 { continue }
 
-            let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
-            if !projected.x.isFinite || !projected.y.isFinite { continue }
+            let projected = kf.camera.projectPoint(
+                world,
+                orientation: kf.orientation,
+                viewportSize: kf.viewport
+            )
+            guard projected.x.isFinite, projected.y.isFinite else { continue }
 
             let nx = projected.x / max(kf.viewport.width, 1)
             let ny = projected.y / max(kf.viewport.height, 1)
-            if nx < 0 || nx > 1 || ny < 0 || ny > 1 { continue }
+            guard nx >= 0, nx <= 1, ny >= 0, ny <= 1 else { continue }
 
-            var img = CGPoint(x: nx, y: ny).applying(kf.displayTransform.inverted())
-            if img.x < 0 || img.x > 1 || img.y < 0 || img.y > 1 {
-                img = CGPoint(x: nx, y: ny)
+            // Try inverted display transform, then raw
+            var uv = CGPoint(x: nx, y: ny).applying(kf.displayTransform.inverted())
+            if uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1 {
+                uv = CGPoint(x: nx, y: ny)
             }
-            if img.x < 0 || img.x > 1 || img.y < 0 || img.y > 1 { continue }
+            // Also try without invert (display transform forward)
+            if uv.x < 0 || uv.x > 1 || uv.y < 0 || uv.y > 1 {
+                uv = CGPoint(x: nx, y: ny).applying(kf.displayTransform)
+            }
+            guard uv.x >= 0, uv.x <= 1, uv.y >= 0, uv.y <= 1 else { continue }
 
-            let rgb = rgbAt(u: Float(img.x), v: Float(img.y), kf: kf)
-            let facing = max(0.01, simd_dot(normal, toCam / dist))
-            let score = facing * (2.0 / max(dist, 0.25))
+            let rgb = rgbAt(u: Float(uv.x), v: Float(uv.y), kf: kf)
+            let facing = abs(simd_dot(normal, toCam / dist))
+            let score = (0.3 + facing) * (1.5 / max(dist, 0.2))
             if score > bestScore {
                 bestScore = score
                 best = rgb
@@ -341,61 +264,63 @@ enum PhotoTexturedMeshBuilder {
         return best
     }
 
-    private static func averageKeyframeColor(_ keyframes: [Keyframe]) -> (UInt8, UInt8, UInt8)? {
-        guard let kf = keyframes.last, !kf.rgb.isEmpty else { return nil }
-        var r = 0, g = 0, b = 0, n = 0
-        // Sample grid across image
-        let step = max(1, (kf.rgbWidth * kf.rgbHeight) / 200)
-        var i = 0
-        while i < kf.rgbWidth * kf.rgbHeight {
-            let o = i * 3
-            if o + 2 < kf.rgb.count {
-                r += Int(kf.rgb[o]); g += Int(kf.rgb[o + 1]); b += Int(kf.rgb[o + 2]); n += 1
-            }
-            i += step
-        }
-        guard n > 0 else { return nil }
-        return (UInt8(r / n), UInt8(g / n), UInt8(b / n))
+    /// Always returns a real camera pixel (grid sample) — last-resort color.
+    private static func forcedKeyframeColor(
+        _ keyframes: [Keyframe],
+        seed: Int
+    ) -> (UInt8, UInt8, UInt8)? {
+        guard let kf = keyframes.last, kf.rgbWidth > 2, kf.rgbHeight > 2 else { return nil }
+        let px = abs(seed * 37) % kf.rgbWidth
+        let py = abs(seed * 91) % kf.rgbHeight
+        return rgbAt(
+            u: Float(px) / Float(kf.rgbWidth - 1),
+            v: Float(py) / Float(kf.rgbHeight - 1),
+            kf: kf
+        )
     }
 
     private static func rgbAt(u: Float, v: Float, kf: Keyframe) -> (UInt8, UInt8, UInt8) {
         let w = kf.rgbWidth
         let h = kf.rgbHeight
-        guard w > 0, h > 0 else { return (180, 180, 180) }
-        let x = min(max(Int(u * Float(w - 1)), 0), w - 1)
-        let y = min(max(Int(v * Float(h - 1)), 0), h - 1)
+        let x = min(max(Int(u * Float(max(w - 1, 1))), 0), w - 1)
+        let y = min(max(Int(v * Float(max(h - 1, 1))), 0), h - 1)
         let o = (y * w + x) * 3
-        guard o + 2 < kf.rgb.count else { return (180, 180, 180) }
-        return (kf.rgb[o], kf.rgb[o + 1], kf.rgb[o + 2])
+        guard o + 2 < kf.rgb.count else { return (180, 100, 100) }
+        // Mild saturation so colors pop vs white outdoor blowout
+        var r = Float(kf.rgb[o])
+        var g = Float(kf.rgb[o + 1])
+        var b = Float(kf.rgb[o + 2])
+        let gray = (r + g + b) / 3
+        let sat: Float = 1.4
+        r = min(max(gray + (r - gray) * sat, 0), 255)
+        g = min(max(gray + (g - gray) * sat, 0), 255)
+        b = min(max(gray + (b - gray) * sat, 0), 255)
+        // Prevent pure white: pull down very bright neutrals a bit
+        if r > 245 && g > 245 && b > 245 {
+            r = 230; g = 228; b = 220
+        }
+        return (UInt8(r), UInt8(g), UInt8(b))
     }
 
-    // MARK: - Geometry helpers
-
-    private static func source(
-        _ values: [Float],
-        semantic: SCNGeometrySource.Semantic,
-        components: Int,
-        count: Int,
-        float: Bool
-    ) -> SCNGeometrySource {
-        let data = values.withUnsafeBufferPointer { Data(buffer: $0) }
-        return SCNGeometrySource(
-            data: data, semantic: semantic, vectorCount: count,
-            usesFloatComponents: float, componentsPerVector: components,
-            bytesPerComponent: 4, dataOffset: 0, dataStride: 4 * components
-        )
+    private static func proofImage(from keyframes: [Keyframe]) -> UIImage? {
+        guard let kf = keyframes.last else { return nil }
+        var rgba = [UInt8](repeating: 255, count: kf.rgbWidth * kf.rgbHeight * 4)
+        for i in 0..<(kf.rgbWidth * kf.rgbHeight) {
+            rgba[i * 4] = kf.rgb[i * 3]
+            rgba[i * 4 + 1] = kf.rgb[i * 3 + 1]
+            rgba[i * 4 + 2] = kf.rgb[i * 3 + 2]
+            rgba[i * 4 + 3] = 255
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: &rgba, width: kf.rgbWidth, height: kf.rgbHeight,
+            bitsPerComponent: 8, bytesPerRow: kf.rgbWidth * 4,
+            space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let cg = ctx.makeImage() else { return nil }
+        return UIImage(cgImage: cg)
     }
 
-    private static func byteColorSource(_ rgba: [UInt8], count: Int) -> SCNGeometrySource {
-        let data = rgba.withUnsafeBufferPointer { Data(buffer: $0) }
-        return SCNGeometrySource(
-            data: data, semantic: .color, vectorCount: count,
-            usesFloatComponents: false, componentsPerVector: 4,
-            bytesPerComponent: 1, dataOffset: 0, dataStride: 4
-        )
-    }
-
-    // MARK: - Keyframe capture
+    // MARK: - Keyframe from ARFrame
 
     static func makeKeyframe(
         from frame: ARFrame,
@@ -453,12 +378,7 @@ enum PhotoTexturedMeshBuilder {
                     var r = yf + 1.402 * Cr
                     var g = yf - 0.344136 * Cb - 0.714136 * Cr
                     var b = yf + 1.772 * Cb
-                    // Boost saturation so outdoor scans don't wash to white
-                    let gray = (r + g + b) / 3
-                    let sat: Float = 1.35
-                    r = min(max(gray + (r - gray) * sat, 0), 255)
-                    g = min(max(gray + (g - gray) * sat, 0), 255)
-                    b = min(max(gray + (b - gray) * sat, 0), 255)
+                    r = min(max(r, 0), 255); g = min(max(g, 0), 255); b = min(max(b, 0), 255)
                     let o = (j * w + i) * 3
                     rgb[o] = UInt8(r); rgb[o + 1] = UInt8(g); rgb[o + 2] = UInt8(b)
                 }

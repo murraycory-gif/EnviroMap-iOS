@@ -228,20 +228,13 @@ struct MeshSceneView: UIViewRepresentable {
                         .createNormalsIfAbsent: true,
                     ])
 
-                    // Re-apply color atlas if present (guarantees color after load)
-                    let atlasPath = url.deletingLastPathComponent().appendingPathComponent("atlas.png").path
-                    let hasAtlas = FileManager.default.fileExists(atPath: atlasPath)
+                    // Keep solid camera colors from export
                     scene.rootNode.enumerateChildNodes { node, _ in
                         guard let geos = node.geometry else { return }
                         for mat in geos.materials {
                             mat.lightingModel = .constant
                             mat.isDoubleSided = true
                             mat.shaderModifiers = [:]
-                            if hasAtlas {
-                                mat.diffuse.contents = atlasPath
-                                mat.diffuse.magnificationFilter = .nearest
-                                mat.diffuse.minificationFilter = .nearest
-                            }
                         }
                     }
 

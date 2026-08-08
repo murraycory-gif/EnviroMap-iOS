@@ -227,8 +227,8 @@ struct FullEnvironmentScanView: View {
                 // Mesh card
                 ZStack {
                     RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous)
-                        .fill(AppTheme.card)
-                        .shadow(color: .black.opacity(0.06), radius: 16, y: 6)
+                        .fill(Color(red: 0.08, green: 0.09, blue: 0.12))
+                        .shadow(color: .black.opacity(0.12), radius: 16, y: 6)
 
                     if let scene = model.previewScene {
                         PreviewMeshView(scene: scene)
@@ -441,10 +441,11 @@ struct PreviewMeshView: UIViewRepresentable {
     }
 
     private func prepare(_ scene: SCNScene) {
-        scene.background.contents = UIColor(red: 0.10, green: 0.11, blue: 0.14, alpha: 1)
+        scene.background.contents = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let mats = node.geometry?.materials else { return }
             for mat in mats {
+                // Keep solid camera colors — never override diffuse to white
                 mat.lightingModel = .constant
                 mat.isDoubleSided = true
                 mat.shaderModifiers = [:]
@@ -566,7 +567,7 @@ struct CapturedMeshChunk {
 
 // MARK: - ARKit controller (stable long scans)
 
-final class FullEnvScanController: UIViewController, ARSessionDelegate {
+final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessionDelegate {
     private var arView: ARSCNView!
     private var isRunning = false
 
@@ -596,7 +597,8 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         scn.automaticallyUpdatesLighting = true
         scn.scene = SCNScene()
         scn.rendersCameraGrain = false
-        // Yellow feature points = live proof of tracking / capture
+        scn.delegate = self
+        // Yellow feature points + we'll add blue mesh lines for coverage
         scn.debugOptions = [.showFeaturePoints]
         view.addSubview(scn)
         arView = scn
@@ -682,6 +684,106 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
         // Write atlas + scn for permanent save
         _ = PhotoTexturedMeshBuilder.exportChunks(meshChunks, keyframes: frames, to: tmp)
         return .init(directory: tmp, fileName: "room_full.scn", scene: scene)
+    }
+
+
+    // MARK: - Live blue mesh (throttled — better coverage feedback)
+
+    private var lastVizTime: [UUID: TimeInterval] = [:]
+
+    func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
+        guard anchor is ARMeshAnchor else { return nil }
+        return SCNNode()
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+        guard let mesh = anchor as? ARMeshAnchor else { return }
+        applyBlueWire(node: node, mesh: mesh)
+        // Also copy into our safe store
+        if let chunk = Self.copyChunk(from: mesh) {
+            stateLock.lock()
+            chunks[chunk.id] = chunk
+            let mc = chunks.count
+            let fc = keyframes.count
+            stateLock.unlock()
+            emitStats(meshCount: mc, frameCount: fc)
+        }
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+        guard let mesh = anchor as? ARMeshAnchor else { return }
+        let now = CACurrentMediaTime()
+        if let last = lastVizTime[mesh.identifier], now - last < 0.45 { return }
+        lastVizTime[mesh.identifier] = now
+        applyBlueWire(node: node, mesh: mesh)
+        if let chunk = Self.copyChunk(from: mesh) {
+            stateLock.lock()
+            chunks[chunk.id] = chunk
+            let mc = chunks.count
+            let fc = keyframes.count
+            stateLock.unlock()
+            emitStats(meshCount: mc, frameCount: fc)
+        }
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
+        lastVizTime.removeValue(forKey: anchor.identifier)
+        stateLock.lock()
+        chunks.removeValue(forKey: anchor.identifier)
+        stateLock.unlock()
+    }
+
+    private func applyBlueWire(node: SCNNode, mesh: ARMeshAnchor) {
+        guard let geom = Self.wireGeometry(mesh.geometry) else { return }
+        node.geometry = geom
+    }
+
+    private static func wireGeometry(_ mesh: ARMeshGeometry) -> SCNGeometry? {
+        let vCount = mesh.vertices.count
+        guard vCount > 0, mesh.faces.count > 0, vCount < 120_000 else { return nil }
+        var positions = [Float](repeating: 0, count: vCount * 3)
+        for i in 0..<vCount {
+            let p = mesh.vertices.buffer.contents()
+                .advanced(by: mesh.vertices.offset + mesh.vertices.stride * i)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            positions[i * 3] = p.x
+            positions[i * 3 + 1] = p.y
+            positions[i * 3 + 2] = p.z
+        }
+        let posData = positions.withUnsafeBufferPointer { Data(buffer: $0) }
+        let source = SCNGeometrySource(
+            data: posData, semantic: .vertex, vectorCount: vCount,
+            usesFloatComponents: true, componentsPerVector: 3,
+            bytesPerComponent: 4, dataOffset: 0, dataStride: 12
+        )
+        var indices = [UInt32]()
+        let faces = mesh.faces
+        // Only take every other triangle for lighter wireframe
+        for f in stride(from: 0, to: faces.count, by: 1) {
+            for c in 0..<faces.indexCountPerPrimitive {
+                let off = (f * faces.indexCountPerPrimitive + c) * faces.bytesPerIndex
+                let base = faces.buffer.contents().advanced(by: off)
+                if faces.bytesPerIndex == 2 {
+                    indices.append(UInt32(base.assumingMemoryBound(to: UInt16.self).pointee))
+                } else {
+                    indices.append(base.assumingMemoryBound(to: UInt32.self).pointee)
+                }
+            }
+        }
+        guard !indices.isEmpty else { return nil }
+        let iData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
+        let element = SCNGeometryElement(
+            data: iData, primitiveType: .triangles,
+            primitiveCount: indices.count / 3, bytesPerIndex: 4
+        )
+        let geom = SCNGeometry(sources: [source], elements: [element])
+        let mat = SCNMaterial()
+        mat.fillMode = .lines
+        mat.diffuse.contents = UIColor(red: 0.25, green: 0.75, blue: 1.0, alpha: 0.95)
+        mat.isDoubleSided = true
+        mat.lightingModel = .constant
+        geom.materials = [mat]
+        return geom
     }
 
     // MARK: ARSessionDelegate
