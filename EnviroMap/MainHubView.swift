@@ -44,11 +44,13 @@ struct ToolsHomeView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
-                        // Brand
+                        // Brand — centered logo + name
                         HStack {
+                            Spacer(minLength: 0)
                             BrandHeader(height: 56)
-                            Spacer()
+                            Spacer(minLength: 0)
                         }
+                        .frame(maxWidth: .infinity)
                         .padding(.top, 8)
 
                         // Plain headline
