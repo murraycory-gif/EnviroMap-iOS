@@ -89,9 +89,9 @@ struct LevelToolView: View {
                     .foregroundStyle(levelColor)
                     .contentTransition(.numericText())
 
-                Text(motion.isLevel ? "LEVEL" : motion.hint)
+                Text(motion.isLevel ? "Level" : motion.hint)
                     .font(.subheadline.weight(.bold))
-                    .tracking(1.2)
+                    .tracking(1.0)
                     .foregroundStyle(motion.isLevel ? levelColor : .white.opacity(0.65))
 
                 HStack(spacing: 10) {
@@ -101,9 +101,10 @@ struct LevelToolView: View {
                 .padding(.horizontal, 24)
 
                 Text(motion.instruction)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.5))
                     .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 32)
             }
             .padding(.bottom, max(safe.bottom, 16) + 20)
@@ -115,7 +116,7 @@ struct LevelToolView: View {
 
     private func landscapeChrome(size: CGSize, safe: EdgeInsets) -> some View {
         ZStack {
-            // Left data column — no mode title text
+            // Left data column — angle + metrics only
             HStack {
                 VStack(alignment: .leading, spacing: 16) {
                     Text(String(format: "%.0f°", motion.primaryDeg))
@@ -126,7 +127,7 @@ struct LevelToolView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
 
-                    Text(motion.isLevel ? "LEVEL" : motion.hint)
+                    Text(motion.isLevel ? "Level" : motion.hint)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(motion.isLevel ? levelColor : .white.opacity(0.7))
 
@@ -135,25 +136,30 @@ struct LevelToolView: View {
                         metricCard(motion.axisBName, motion.axisBDeg)
                     }
                     .frame(maxWidth: 200)
-
-                    Text(motion.instruction)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.4))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 210, alignment: .leading)
                 }
-                .padding(.leading, max(safe.leading, 20) + 64) // clear of back button + breathing room
+                .padding(.leading, max(safe.leading, 20) + 64)
                 .padding(.top, 8)
                 .frame(maxHeight: .infinity, alignment: .center)
 
                 Spacer()
             }
 
-            // Mode chips — vertical stack on the right
+            // Mode chips — vertical on the right
             HStack {
                 Spacer()
                 modeChipsVertical
                     .padding(.trailing, max(safe.trailing, 20) + 8)
+            }
+
+            // Instruction — centered bottom of screen
+            VStack {
+                Spacer()
+                Text(motion.instruction)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: size.width * 0.7)
+                    .padding(.bottom, max(safe.bottom, 12) + 14)
             }
         }
         .frame(width: size.width, height: size.height)
@@ -410,9 +416,9 @@ final class LevelMotion: ObservableObject {
             offsetX = mapToOffset(degX)
             offsetY = mapToOffset(-degY)
             isLevel = abs(degX) < levelThreshold && abs(degY) < levelThreshold
-            hint = isLevel ? "LEVEL" : "Tilt until bubble centers"
-            instruction = "Lay the phone flat on a counter, shelf, or floor."
-            modeTitle = "Flat · surface"
+            hint = isLevel ? "Level" : "Tilt Until Bubble Centers"
+            instruction = "Lay The Phone Flat On A Counter, Shelf, Or Floor."
+            modeTitle = "Flat · Surface"
 
         case .upright:
             let degSide = asin(clamp(gx, -1, 1)) * 180 / .pi
@@ -425,14 +431,14 @@ final class LevelMotion: ObservableObject {
             offsetX = mapToOffset(degSide)
             offsetY = mapToOffset(degLean)
             isLevel = abs(degSide) < levelThreshold && abs(degLean) < levelThreshold
-            hint = isLevel ? "PLUMB" : "Align to vertical"
-            instruction = "Hold upright against a wall or post."
-            modeTitle = "Upright · plumb"
+            hint = isLevel ? "Level" : "Align To Vertical"
+            instruction = "Hold Upright Against A Wall Or Post."
+            modeTitle = "Upright · Plumb"
 
         case .side:
             let degAlong = asin(clamp(gy, -1, 1)) * 180 / .pi
             let degLean = asin(clamp(gz, -1, 1)) * 180 / .pi
-            axisAName = "Along edge"
+            axisAName = "Along Edge"
             axisBName = "Lean"
             axisADeg = degAlong
             axisBDeg = degLean
@@ -440,9 +446,9 @@ final class LevelMotion: ObservableObject {
             offsetX = mapToOffset(degAlong)
             offsetY = mapToOffset(degLean)
             isLevel = abs(degAlong) < levelThreshold && abs(degLean) < levelThreshold
-            hint = isLevel ? "LEVEL" : "Align on its side"
-            instruction = "Rest on the long edge — center the bubble."
-            modeTitle = "Side · edge"
+            hint = isLevel ? "Level" : "Align On Its Side"
+            instruction = "Rest On The Long Edge — Center The Bubble."
+            modeTitle = "Side · Edge"
         }
 
         if isLevel && !wasLevel {
