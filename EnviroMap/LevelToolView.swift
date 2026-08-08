@@ -116,9 +116,19 @@ struct LevelToolView: View {
 
     private func landscapeChrome(size: CGSize, safe: EdgeInsets) -> some View {
         ZStack {
-            // Left data column — angle + metrics only
-            HStack {
-                VStack(alignment: .leading, spacing: 16) {
+            // Hint / status — top center
+            VStack {
+                Text(motion.isLevel ? "Level" : motion.hint)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(motion.isLevel ? levelColor : .white.opacity(0.85))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, max(safe.top, 10) + 10)
+                Spacer()
+            }
+
+            // Left data — raised toward top so clear of bottom tip
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 14) {
                     Text(String(format: "%.0f°", motion.primaryDeg))
                         .font(.system(size: 72, weight: .bold, design: .rounded))
                         .monospacedDigit()
@@ -127,10 +137,6 @@ struct LevelToolView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
 
-                    Text(motion.isLevel ? "Level" : motion.hint)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(motion.isLevel ? levelColor : .white.opacity(0.7))
-
                     VStack(spacing: 10) {
                         metricCard(motion.axisAName, motion.axisADeg)
                         metricCard(motion.axisBName, motion.axisBDeg)
@@ -138,27 +144,25 @@ struct LevelToolView: View {
                     .frame(maxWidth: 200)
                 }
                 .padding(.leading, max(safe.leading, 20) + 64)
-                .padding(.top, 8)
-                .frame(maxHeight: .infinity, alignment: .center)
-
+                .padding(.top, max(safe.top, 10) + 48) // under top status, not mid-screen
                 Spacer()
             }
 
-            // Mode chips — vertical on the right
+            // Mode chips — vertical on the right (vertically centered)
             HStack {
                 Spacer()
                 modeChipsVertical
                     .padding(.trailing, max(safe.trailing, 20) + 8)
             }
 
-            // Instruction — centered bottom of screen
+            // Instruction — bottom center only
             VStack {
                 Spacer()
                 Text(motion.instruction)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.white.opacity(0.5))
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: size.width * 0.7)
+                    .frame(maxWidth: size.width * 0.72)
                     .padding(.bottom, max(safe.bottom, 12) + 14)
             }
         }
