@@ -228,20 +228,16 @@ struct MeshSceneView: UIViewRepresentable {
                         .createNormalsIfAbsent: true,
                     ])
 
-                    // Force photo / vertex colors to show (not flat gray)
+                    // Standard vertex colors (no custom shaders — avoids magenta)
                     scene.rootNode.enumerateChildNodes { node, _ in
                         guard let geos = node.geometry else { return }
                         for mat in geos.materials {
-                            mat.lightingModel = .constant
+                            mat.lightingModel = .lambert
                             mat.isDoubleSided = true
                             mat.diffuse.contents = UIColor.white
-                            mat.shaderModifiers = [
-                                .surface: """
-                                #pragma body
-                                _surface.diffuse = float4(_geometry.color.rgb, 1.0);
-                                _surface.emission = float4(_geometry.color.rgb * 0.08, 1.0);
-                                """
-                            ]
+                            mat.ambient.contents = UIColor.white
+                            mat.locksAmbientWithDiffuse = true
+                            mat.shaderModifiers = [:]
                         }
                     }
 

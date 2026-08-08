@@ -25,7 +25,7 @@ enum PhotoTexturedMeshBuilder {
         guard !anchors.isEmpty else { return nil }
 
         let scene = SCNScene()
-        scene.background.contents = UIColor(red: 0.06, green: 0.07, blue: 0.10, alpha: 1)
+        scene.background.contents = UIColor(red: 0.94, green: 0.95, blue: 0.98, alpha: 1)
 
         var any = false
         for anchor in anchors {
@@ -40,7 +40,7 @@ enum PhotoTexturedMeshBuilder {
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.intensity = 900
+        ambient.light?.intensity = 1200
         ambient.light?.color = UIColor.white
         scene.rootNode.addChildNode(ambient)
 
@@ -104,7 +104,7 @@ enum PhotoTexturedMeshBuilder {
     ) -> SCNScene? {
         guard !chunks.isEmpty else { return nil }
         let scene = SCNScene()
-        scene.background.contents = UIColor(red: 0.06, green: 0.07, blue: 0.10, alpha: 1)
+        scene.background.contents = UIColor(red: 0.94, green: 0.95, blue: 0.98, alpha: 1)
 
         var any = false
         for chunk in chunks {
@@ -118,7 +118,7 @@ enum PhotoTexturedMeshBuilder {
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.intensity = 900
+        ambient.light?.intensity = 1200
         ambient.light?.color = UIColor.white
         scene.rootNode.addChildNode(ambient)
 
@@ -180,10 +180,19 @@ enum PhotoTexturedMeshBuilder {
             }
         }
 
+        // Convert float colors → byte RGBA for SceneKit reliability
+        var bytes = [UInt8](repeating: 0, count: vCount * 4)
+        for i in 0..<vCount {
+            bytes[i * 4 + 0] = UInt8(min(max(colors[i * 4 + 0] * 255, 0), 255))
+            bytes[i * 4 + 1] = UInt8(min(max(colors[i * 4 + 1] * 255, 0), 255))
+            bytes[i * 4 + 2] = UInt8(min(max(colors[i * 4 + 2] * 255, 0), 255))
+            bytes[i * 4 + 3] = 255
+        }
+
         let sources: [SCNGeometrySource] = [
             source(positions, semantic: .vertex, components: 3, count: vCount),
             source(normalsArr, semantic: .normal, components: 3, count: vCount),
-            source(colors, semantic: .color, components: 4, count: vCount),
+            colorSourceBytes(bytes, count: vCount),
         ]
 
         var idx = chunk.indices
@@ -263,7 +272,13 @@ enum PhotoTexturedMeshBuilder {
         let sources: [SCNGeometrySource] = [
             source(positions, semantic: .vertex, components: 3, count: vCount),
             source(normalsArr, semantic: .normal, components: 3, count: vCount),
-            source(colors, semantic: .color, components: 4, count: vCount),
+            colorSourceBytes({ () -> [UInt8] in
+            var b = [UInt8](repeating: 0, count: vCount * 4)
+            for i in 0..<vCount {
+                b[i*4]=UInt8(min(max(colors[i*4]*255,0),255)); b[i*4+1]=UInt8(min(max(colors[i*4+1]*255,0),255)); b[i*4+2]=UInt8(min(max(colors[i*4+2]*255,0),255)); b[i*4+3]=255
+            }
+            return b
+        }(), count: vCount),
         ]
 
         var indices = [UInt32]()
@@ -288,22 +303,17 @@ enum PhotoTexturedMeshBuilder {
         return geom
     }
 
-    /// Material that actually displays per-vertex photo colors.
+    /// Vertex-color material — no custom shaders (shaders caused magenta).
     private static func photoMaterial() -> SCNMaterial {
         let mat = SCNMaterial()
-        mat.lightingModel = .constant
+        mat.lightingModel = .lambert
         mat.isDoubleSided = true
         mat.diffuse.contents = UIColor.white
+        mat.ambient.contents = UIColor.white
+        mat.locksAmbientWithDiffuse = true
         mat.writesToDepthBuffer = true
         mat.readsFromDepthBuffer = true
-        // Force SceneKit to use geometry vertex colors as surface color
-        mat.shaderModifiers = [
-            .surface: """
-            #pragma body
-            _surface.diffuse = float4(_geometry.color.rgb, 1.0);
-            _surface.emission = float4(_geometry.color.rgb * 0.05, 1.0);
-            """
-        ]
+        mat.fillsMode = .fill
         return mat
     }
 
@@ -323,6 +333,21 @@ enum PhotoTexturedMeshBuilder {
             bytesPerComponent: MemoryLayout<Float>.size,
             dataOffset: 0,
             dataStride: MemoryLayout<Float>.size * components
+        )
+    }
+
+    /// Byte RGBA vertex colors (most reliable in SceneKit).
+    private static func colorSourceBytes(_ rgba: [UInt8], count: Int) -> SCNGeometrySource {
+        let data = rgba.withUnsafeBufferPointer { Data(buffer: $0) }
+        return SCNGeometrySource(
+            data: data,
+            semantic: .color,
+            vectorCount: count,
+            usesFloatComponents: false,
+            componentsPerVector: 4,
+            bytesPerComponent: 1,
+            dataOffset: 0,
+            dataStride: 4
         )
     }
 

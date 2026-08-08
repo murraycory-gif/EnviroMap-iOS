@@ -25,7 +25,7 @@ struct FullEnvironmentScanView: View {
                 previewLayer
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(model.phase == .preview || model.phase == .saving ? .light : .dark)
         .onAppear {
             if name.isEmpty { name = defaultName() }
             model.start()
@@ -165,135 +165,165 @@ struct FullEnvironmentScanView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    // MARK: - Preview before save
+    // MARK: - Preview before save (light AppTheme design)
 
     private var previewLayer: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button {
-                    model.rescan()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.left")
-                        Text("Rescan")
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.blue)
-                }
-                Spacer()
-                Text("Review Scan")
-                    .font(.headline.weight(.bold))
-                    .foregroundStyle(.white)
-                Spacer()
-                Color.clear.frame(width: 70)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+        ZStack {
+            AppTheme.bg.ignoresSafeArea()
 
-            ZStack {
-                if let url = model.previewMeshURL {
-                    PreviewMeshView(url: url)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .padding(.horizontal, 12)
-                } else {
-                    ProgressView().tint(.white)
-                }
+            // Soft blue wash like Home
+            LinearGradient(
+                colors: [
+                    AppTheme.blue.opacity(0.10),
+                    AppTheme.bg,
+                    AppTheme.blueSoft.opacity(0.35),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
 
-                VStack {
-                    Spacer()
-                    HStack {
-                        Label("Drag · Pinch To Inspect", systemImage: "hand.draw")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                        Spacer()
-                        Text("Full Color Mesh")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    .padding(20)
-                }
-            }
-            .frame(maxHeight: .infinity)
-
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Looks Good?")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-
-                Text("Review the full-color mesh. Rescan if holes are too big, or save to My Rooms.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Name")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.55))
-                    TextField("Room Name", text: $name)
-                        .textFieldStyle(.plain)
-                        .padding(14)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.white.opacity(0.10))
-                        )
-                        .foregroundStyle(.white)
-                }
-
-                HStack(spacing: 12) {
+            VStack(spacing: 0) {
+                // Top bar
+                HStack {
                     Button {
                         model.rescan()
                     } label: {
-                        Text("Rescan")
-                            .font(.headline.weight(.semibold))
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Rescan")
+                        }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AppTheme.blue)
+                    }
+                    Spacer()
+                    Text("Review Scan")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+                    Spacer()
+                    Color.clear.frame(width: 64)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                // Mesh card
+                ZStack {
+                    RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous)
+                        .fill(AppTheme.card)
+                        .shadow(color: .black.opacity(0.06), radius: 16, y: 6)
+
+                    if let url = model.previewMeshURL {
+                        PreviewMeshView(url: url)
+                            .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
+                    } else {
+                        ProgressView()
+                            .tint(AppTheme.blue)
+                    }
+
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Label("Drag · Pinch", systemImage: "hand.draw")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(AppTheme.textSecondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.ultraThinMaterial, in: Capsule())
+                            Spacer()
+                            Text("Full Color Mesh")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(AppTheme.blue)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(AppTheme.blueSoft, in: Capsule())
+                        }
+                        .padding(14)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .frame(maxHeight: .infinity)
+
+                // Bottom save card
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Looks Good?")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(AppTheme.text)
+
+                    Text("Check the colors and coverage. Rescan if there are big holes, or save to My Rooms.")
+                        .font(.subheadline)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Name")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.textTertiary)
+                        TextField("Room Name", text: $name)
+                            .padding(14)
+                            .background(
+                                RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
+                                    .fill(AppTheme.bg)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
+                                    .stroke(AppTheme.cardBorder, lineWidth: 1)
+                            )
+                            .foregroundStyle(AppTheme.text)
+                    }
+
+                    HStack(spacing: 12) {
+                        Button {
+                            model.rescan()
+                        } label: {
+                            Text("Rescan")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(AppTheme.blue)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 16)
+                                .background(
+                                    RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
+                                        .stroke(AppTheme.blue.opacity(0.35), lineWidth: 1.5)
+                                )
+                        }
+
+                        Button {
+                            save()
+                        } label: {
+                            Group {
+                                if model.phase == .saving {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Text("Save To My Rooms")
+                                        .font(.headline.weight(.bold))
+                                }
+                            }
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 16)
                             .background(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color.white.opacity(0.25), lineWidth: 1.5)
+                                LinearGradient(
+                                    colors: [AppTheme.blue, AppTheme.blueDeep],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                ),
+                                in: RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
                             )
-                            .foregroundStyle(.white)
-                    }
-
-                    Button {
-                        save()
-                    } label: {
-                        Group {
-                            if model.phase == .saving {
-                                ProgressView().tint(.white)
-                            } else {
-                                Text("Save To My Rooms")
-                                    .font(.headline.weight(.bold))
-                            }
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(
-                            LinearGradient(
-                                colors: [AppTheme.blue, AppTheme.blueDeep],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            ),
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        )
-                        .foregroundStyle(.white)
+                        .disabled(didSave || model.phase == .saving)
                     }
-                    .disabled(didSave || model.phase == .saving)
                 }
+                .padding(18)
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(AppTheme.card)
+                        .shadow(color: .black.opacity(0.08), radius: 20, y: -2)
+                )
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
+                .padding(.bottom, 16)
             }
-            .padding(18)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(Color(red: 0.12, green: 0.14, blue: 0.22))
-                    .shadow(color: .black.opacity(0.35), radius: 20, y: -4)
-            )
-            .padding(.horizontal, 12)
-            .padding(.bottom, 16)
         }
+        .preferredColorScheme(.light)
     }
 
     private func save() {
@@ -334,33 +364,40 @@ struct PreviewMeshView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SCNView {
         let v = SCNView()
-        v.backgroundColor = UIColor(red: 0.07, green: 0.08, blue: 0.12, alpha: 1)
+        v.backgroundColor = UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1)
         v.allowsCameraControl = true
-        v.autoenablesDefaultLighting = false
-        v.antialiasingMode = .multisampling2X
+        v.autoenablesDefaultLighting = true
+        v.antialiasingMode = .multisampling4X
         DispatchQueue.global(qos: .userInitiated).async {
             if let scene = try? SCNScene(url: url, options: [
                 .createNormalsIfAbsent: true,
             ]) {
+                scene.background.contents = UIColor(red: 0.96, green: 0.97, blue: 0.99, alpha: 1)
                 scene.rootNode.enumerateChildNodes { node, _ in
-                    guard let mats = node.geometry?.materials else { return }
-                    for mat in mats {
-                        mat.lightingModel = .constant
+                    guard let geos = node.geometry else { return }
+                    for mat in geos.materials {
+                        // No custom shaders — vertex colors via standard lighting
+                        mat.lightingModel = .lambert
                         mat.isDoubleSided = true
-                        mat.shaderModifiers = [
-                            .surface: """
-                            #pragma body
-                            _surface.diffuse = float4(_geometry.color.rgb, 1.0);
-                            _surface.emission = float4(_geometry.color.rgb * 0.08, 1.0);
-                            """
-                        ]
+                        mat.diffuse.contents = UIColor.white
+                        mat.ambient.contents = UIColor.white
+                        mat.locksAmbientWithDiffuse = true
+                        mat.shaderModifiers = [:] // clear any baked magenta shaders
                     }
                 }
                 let amb = SCNNode()
                 amb.light = SCNLight()
                 amb.light?.type = .ambient
-                amb.light?.intensity = 1000
+                amb.light?.intensity = 1100
+                amb.light?.color = UIColor.white
                 scene.rootNode.addChildNode(amb)
+
+                let key = SCNNode()
+                key.light = SCNLight()
+                key.light?.type = .directional
+                key.light?.intensity = 400
+                key.eulerAngles = SCNVector3(Float(-0.5), Float(0.35), Float(0))
+                scene.rootNode.addChildNode(key)
 
                 DispatchQueue.main.async {
                     v.scene = scene
