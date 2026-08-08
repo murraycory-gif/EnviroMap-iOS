@@ -71,6 +71,9 @@ struct FullEnvironmentScanView: View {
                 Text(model.detailLine)
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.75))
+                Text("FULL ENV · NOT WALLS ONLY")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
             }
             Spacer()
             Color.clear.frame(width: 40, height: 40)
