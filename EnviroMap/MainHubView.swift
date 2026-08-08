@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Main shell: Home + My Rooms (bottom tabs, thumb-friendly).
+/// Tabs: Home · My Rooms · More Tools
 struct MainHubView: View {
     @EnvironmentObject private var store: SessionStore
     @State private var tab: Tab = .tools
 
     enum Tab: Hashable {
-        case tools, library
+        case tools, library, more
     }
 
     var body: some View {
@@ -22,12 +22,18 @@ struct MainHubView: View {
                     Label("My Rooms", systemImage: "building.2.fill")
                 }
                 .tag(Tab.library)
+
+            MoreToolsTabView()
+                .tabItem {
+                    Label("More Tools", systemImage: "wrench.and.screwdriver.fill")
+                }
+                .tag(Tab.more)
         }
         .tint(AppTheme.blue)
     }
 }
 
-// MARK: - Home (mobile-first: primary action above the fold)
+// MARK: - Home
 
 struct ToolsHomeView: View {
     @EnvironmentObject private var store: SessionStore
@@ -36,166 +42,134 @@ struct ToolsHomeView: View {
     @State private var showScanner = false
     @State private var path = NavigationPath()
     @State private var chipAlert: String?
-    @State private var showMoreTools = false
 
     private var roomCount: Int { store.sessions.count }
+
+    /// 2-across grid items (measure + post-scan)
+    private var gridItems: [HomeGridItem] {
+        [
+            .init(title: "3D", subtitle: "View scan", icon: "cube.fill", needsScan: true, route: nil, action: .mesh),
+            .init(title: "Walk", subtitle: "AR walk", icon: "figure.walk", needsScan: true, route: nil, action: .walk),
+            .init(title: "Design", subtitle: "Furniture", icon: "sofa.fill", needsScan: false, route: .roomPlan, action: .route),
+            .init(title: "Ruler", subtitle: "Distance", icon: "ruler", needsScan: false, route: .ruler, action: .route),
+            .init(title: "Level", subtitle: "Flat check", icon: "level", needsScan: false, route: .level, action: .route),
+            .init(title: "Area", subtitle: "Sq ft", icon: "square.dashed", needsScan: false, route: .area, action: .route),
+        ]
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
             ZStack {
                 background.ignoresSafeArea()
 
-                // No long ScrollView for core path — fits one phone screen
                 VStack(spacing: 0) {
-                    // Compact centered brand
                     HStack {
                         Spacer(minLength: 0)
-                        BrandHeader(height: 44)
+                        BrandHeader(height: 40)
                         Spacer(minLength: 0)
                     }
-                    .padding(.top, 6)
-                    .padding(.bottom, 12)
+                    .padding(.top, 4)
+                    .padding(.bottom, 10)
 
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("Map your space")
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                            .foregroundStyle(AppTheme.text)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Map your space")
+                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .foregroundStyle(AppTheme.text)
 
-                        // PRIMARY — thumb zone upper-mid, huge target
-                        Button {
-                            showScanner = true
-                        } label: {
-                            HStack(spacing: 14) {
-                                ZStack {
-                                    Circle()
-                                        .fill(.white.opacity(0.22))
-                                        .frame(width: 52, height: 52)
-                                    Image(systemName: "camera.viewfinder")
-                                        .font(.title2.weight(.bold))
-                                        .foregroundStyle(.white)
+                            // Primary
+                            Button {
+                                showScanner = true
+                            } label: {
+                                HStack(spacing: 12) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(.white.opacity(0.22))
+                                            .frame(width: 48, height: 48)
+                                        Image(systemName: "camera.viewfinder")
+                                            .font(.title3.weight(.bold))
+                                            .foregroundStyle(.white)
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Scan a room")
+                                            .font(.headline.weight(.bold))
+                                        Text("Point camera · walk slowly")
+                                            .font(.caption)
+                                            .opacity(0.92)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "arrow.right.circle.fill")
+                                        .font(.title2)
                                 }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Scan a room")
-                                        .font(.title3.weight(.bold))
-                                    Text("Point the camera · walk slowly")
-                                        .font(.caption)
-                                        .opacity(0.92)
-                                }
-                                Spacer()
-                                Image(systemName: "arrow.right.circle.fill")
-                                    .font(.title2)
-                                    .opacity(0.95)
-                            }
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 18)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [AppTheme.blue, AppTheme.blueDeep],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
+                                .foregroundStyle(.white)
+                                .padding(14)
+                                .frame(maxWidth: .infinity, minHeight: 72)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [AppTheme.blue, AppTheme.blueDeep],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
                                         )
-                                    )
-                                    .shadow(color: AppTheme.blue.opacity(0.32), radius: 14, y: 6)
-                            )
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Scan a room")
+                                        .shadow(color: AppTheme.blue.opacity(0.3), radius: 12, y: 5)
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
 
-                        // Status + My Rooms (one clear secondary)
-                        Button {
-                            switchToLibrary()
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "building.2.fill")
-                                    .font(.body.weight(.semibold))
-                                    .foregroundStyle(AppTheme.blue)
-                                    .frame(width: 44, height: 44)
-                                    .background(AppTheme.blueSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("My rooms")
-                                        .font(.headline)
-                                        .foregroundStyle(AppTheme.text)
-                                    Text(roomCount == 0 ? "No scans yet" : "\(roomCount) saved")
-                                        .font(.caption)
-                                        .foregroundStyle(AppTheme.textSecondary)
+                            // My rooms
+                            Button {
+                                switchToLibrary()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "building.2.fill")
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(AppTheme.blue)
+                                        .frame(width: 44, height: 44)
+                                        .background(AppTheme.blueSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("My rooms")
+                                            .font(.headline)
+                                            .foregroundStyle(AppTheme.text)
+                                        Text(roomCount == 0 ? "No scans yet" : "\(roomCount) saved")
+                                            .font(.caption)
+                                            .foregroundStyle(AppTheme.textSecondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(AppTheme.textTertiary)
                                 }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(AppTheme.textTertiary)
+                                .padding(12)
+                                .frame(minHeight: 56)
+                                .background(cardBg)
+                                .contentShape(Rectangle())
                             }
-                            .padding(12)
-                            .background(cardBg)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                            .buttonStyle(.plain)
 
-                        // Quick actions — 3 equal targets, no micro-chips
-                        Text("After you scan")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .padding(.top, 2)
+                            Text("Tools")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(AppTheme.textSecondary)
+                                .padding(.top, 4)
 
-                        HStack(spacing: 10) {
-                            quickAction(
-                                title: "3D",
-                                icon: "cube.fill",
-                                enabled: roomCount > 0
+                            // 2-across grid
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(.flexible(), spacing: 10),
+                                    GridItem(.flexible(), spacing: 10),
+                                ],
+                                spacing: 10
                             ) {
-                                openLatestMesh()
-                            }
-                            quickAction(
-                                title: "Walk",
-                                icon: "figure.walk",
-                                enabled: roomCount > 0
-                            ) {
-                                openLatestWalkAR()
-                            }
-                            quickAction(
-                                title: "Design",
-                                icon: "sofa.fill",
-                                enabled: true
-                            ) {
-                                path.append(ToolRoute.roomPlan)
+                                ForEach(gridItems) { item in
+                                    gridButton(item)
+                                }
                             }
                         }
-
-                        Spacer(minLength: 8)
-
-                        // Progressive disclosure — tools behind one control
-                        Button {
-                            showMoreTools = true
-                        } label: {
-                            HStack {
-                                Image(systemName: "wrench.and.screwdriver.fill")
-                                    .foregroundStyle(AppTheme.blue)
-                                Text("More tools")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.text)
-                                Spacer()
-                                Text("Ruler · Level · Area…")
-                                    .font(.caption)
-                                    .foregroundStyle(AppTheme.textTertiary)
-                                Image(systemName: "chevron.up")
-                                    .font(.caption.weight(.bold))
-                                    .foregroundStyle(AppTheme.textTertiary)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 14)
-                            .frame(minHeight: 48)
-                            .background(cardBg)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 16)
                     }
-                    .padding(.horizontal, 20)
                 }
             }
             .navigationBarHidden(true)
@@ -205,9 +179,6 @@ struct ToolsHomeView: View {
             .fullScreenCover(isPresented: $showScanner) {
                 ScanFlowView()
                     .environmentObject(store)
-            }
-            .sheet(isPresented: $showMoreTools) {
-                moreToolsSheet
             }
             .onChange(of: showScanner) { _, open in
                 if !open { store.loadIndex() }
@@ -224,81 +195,47 @@ struct ToolsHomeView: View {
         }
     }
 
-    // MARK: - More tools (sheet = progressive disclosure)
-
-    private var moreToolsSheet: some View {
-        NavigationStack {
-            List {
-                Section {
-                    moreLink("Ruler", "Measure distance", "ruler", .ruler)
-                    moreLink("Level", "Check if flat", "level", .level)
-                    moreLink("Area", "Square feet", "square.dashed", .area)
-                } header: {
-                    Text("Measure")
+    private func gridButton(_ item: HomeGridItem) -> some View {
+        let enabled = !item.needsScan || roomCount > 0
+        return Button {
+            switch item.action {
+            case .mesh:
+                openLatestMesh()
+            case .walk:
+                openLatestWalkAR()
+            case .route:
+                if let route = item.route {
+                    path.append(route)
                 }
-
-                Section {
-                    moreLink("Photo to 3D", "Picture → simple 3D", "camera.fill", .image3d)
-                    moreLink("Words to 3D", "Describe a room", "textformat", .text3d)
-                } header: {
-                    Text("Create")
-                }
-
-                Section {
-                    Button {
-                        showMoreTools = false
-                        showScanner = true
-                    } label: {
-                        Label("Scan a room", systemImage: "camera.viewfinder")
-                    }
-                    Button {
-                        showMoreTools = false
-                        switchToLibrary()
-                    } label: {
-                        Label("My rooms", systemImage: "building.2.fill")
-                    }
-                } header: {
-                    Text("Main")
-                }
-            }
-            .navigationTitle("More tools")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { showMoreTools = false }
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-        .tint(AppTheme.blue)
-    }
-
-    private func moreLink(_ title: String, _ sub: String, _ icon: String, _ route: ToolRoute) -> some View {
-        Button {
-            showMoreTools = false
-            // Delay so sheet dismisses cleanly before push
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                path.append(route)
             }
         } label: {
-            Label {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .foregroundStyle(AppTheme.text)
-                    Text(sub)
-                        .font(.caption)
-                        .foregroundStyle(AppTheme.textSecondary)
-                }
-            } icon: {
-                Image(systemName: icon)
-                    .foregroundStyle(AppTheme.blue)
+            VStack(spacing: 8) {
+                Image(systemName: item.icon)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(enabled ? AppTheme.blue : AppTheme.textTertiary)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        (enabled ? AppTheme.blueSoft : Color.gray.opacity(0.08)),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                Text(item.title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(enabled ? AppTheme.text : AppTheme.textTertiary)
+                Text(item.subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .padding(.horizontal, 8)
+            .frame(minHeight: 108)
+            .background(cardBg)
+            .contentShape(Rectangle())
+            .opacity(enabled ? 1 : 0.72)
         }
+        .buttonStyle(.plain)
     }
-
-    // MARK: - UI bits
 
     private var cardBg: some View {
         RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -308,31 +245,6 @@ struct ToolsHomeView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(AppTheme.cardBorder, lineWidth: 1)
             )
-    }
-
-    private func quickAction(title: String, icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(enabled ? AppTheme.blue : AppTheme.textTertiary)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        (enabled ? AppTheme.blueSoft : Color.gray.opacity(0.08)),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    )
-                Text(title)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(enabled ? AppTheme.text : AppTheme.textTertiary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .background(cardBg)
-            .contentShape(Rectangle())
-            .opacity(enabled ? 1 : 0.75)
-        }
-        .buttonStyle(.plain)
-        .frame(minHeight: 88)
     }
 
     private var background: some View {
@@ -349,8 +261,6 @@ struct ToolsHomeView: View {
             )
         }
     }
-
-    // MARK: - Navigation destinations (all features preserved)
 
     @ViewBuilder
     private func destination(for route: ToolRoute) -> some View {
@@ -385,19 +295,13 @@ struct ToolsHomeView: View {
             if let s = store.sessions.first(where: { $0.id == id }) {
                 RoomViewerView(session: s)
             } else {
-                needScanPlaceholder(
-                    title: "See 3D room",
-                    message: "Scan a room first, then open 3D."
-                )
+                needScanPlaceholder(title: "See 3D room", message: "Scan a room first, then open 3D.")
             }
         case .walkAR(let id):
             if let s = store.sessions.first(where: { $0.id == id }) {
                 ARWalkView(usdzURL: store.usdzURL(for: s))
             } else {
-                needScanPlaceholder(
-                    title: "Walk in AR",
-                    message: "Scan a room first, then walk in AR."
-                )
+                needScanPlaceholder(title: "Walk in AR", message: "Scan a room first, then walk in AR.")
             }
         case .pickSession(let purpose):
             SessionPickerView(purpose: purpose)
@@ -424,8 +328,6 @@ struct ToolsHomeView: View {
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
     }
-
-    // MARK: - Actions
 
     private func openLatestMesh() {
         store.loadIndex()
@@ -454,18 +356,137 @@ struct ToolsHomeView: View {
     }
 }
 
-// MARK: - Pick a saved scan
+// MARK: - More Tools tab (was pull-up sheet)
+
+struct MoreToolsTabView: View {
+    @EnvironmentObject private var store: SessionStore
+    @State private var path = NavigationPath()
+    @State private var showScanner = false
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            ZStack {
+                AppTheme.bg.ignoresSafeArea()
+                LinearGradient(
+                    colors: [AppTheme.blue.opacity(0.10), AppTheme.bg],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("More tools")
+                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                            .foregroundStyle(AppTheme.text)
+                            .padding(.top, 8)
+
+                        Text("Extra ways to create and explore")
+                            .font(.subheadline)
+                            .foregroundStyle(AppTheme.textSecondary)
+
+                        LazyVGrid(
+                            columns: [
+                                GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10),
+                            ],
+                            spacing: 10
+                        ) {
+                            moreCard("Photo to 3D", "Picture → 3D", "camera.fill") {
+                                path.append(ToolRoute.image3d)
+                            }
+                            moreCard("Words to 3D", "Describe a room", "textformat") {
+                                path.append(ToolRoute.text3d)
+                            }
+                            moreCard("Room design", "Planner + plan", "sofa.fill") {
+                                path.append(ToolRoute.roomPlan)
+                            }
+                            moreCard("Scan room", "LiDAR capture", "camera.viewfinder") {
+                                showScanner = true
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 24)
+                }
+            }
+            .navigationBarHidden(true)
+            .navigationDestination(for: ToolRoute.self) { route in
+                switch route {
+                case .image3d: ImageTo3DView()
+                case .text3d: TextTo3DView()
+                case .roomPlan: RoomPlanHubView()
+                case .planner: RoomPlannerView(session: nil)
+                case .ruler: RulerToolView()
+                case .level: LevelToolView()
+                case .area: AreaToolView()
+                default:
+                    Text("Open from Home")
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+            }
+            .fullScreenCover(isPresented: $showScanner) {
+                ScanFlowView()
+                    .environmentObject(store)
+            }
+        }
+    }
+
+    private func moreCard(_ title: String, _ sub: String, _ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AppTheme.blue)
+                    .frame(width: 44, height: 44)
+                    .background(AppTheme.blueSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AppTheme.text)
+                    .multilineTextAlignment(.center)
+                Text(sub)
+                    .font(.caption2)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .padding(.horizontal, 8)
+            .frame(minHeight: 120)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(AppTheme.card)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(AppTheme.cardBorder, lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Grid model
+
+struct HomeGridItem: Identifiable {
+    enum Action { case mesh, walk, route }
+    let id = UUID()
+    let title: String
+    let subtitle: String
+    let icon: String
+    let needsScan: Bool
+    let route: ToolRoute?
+    let action: Action
+}
+
+// MARK: - Session picker
 
 enum SessionPickPurpose: String, Hashable {
     case mesh
     case walkAR
 
-    var title: String {
-        switch self {
-        case .mesh: return "Pick a room"
-        case .walkAR: return "Pick a room"
-        }
-    }
+    var title: String { "Pick a room" }
 }
 
 struct SessionPickerView: View {
@@ -477,7 +498,12 @@ struct SessionPickerView: View {
             Section {
                 ForEach(store.sessions) { session in
                     NavigationLink {
-                        destination(for: session)
+                        switch purpose {
+                        case .mesh:
+                            RoomViewerView(session: session)
+                        case .walkAR:
+                            ARWalkView(usdzURL: store.usdzURL(for: session))
+                        }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(session.name).font(.headline)
@@ -501,16 +527,6 @@ struct SessionPickerView: View {
                     description: Text("Scan a room first.")
                 )
             }
-        }
-    }
-
-    @ViewBuilder
-    private func destination(for session: RoomSession) -> some View {
-        switch purpose {
-        case .mesh:
-            RoomViewerView(session: session)
-        case .walkAR:
-            ARWalkView(usdzURL: store.usdzURL(for: session))
         }
     }
 }
