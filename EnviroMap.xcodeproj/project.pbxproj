@@ -1,0 +1,359 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A01 /* EnviroMapApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B01 /* EnviroMapApp.swift */; };
+		A02 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B02 /* RootView.swift */; };
+		A03 /* RoomSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B03 /* RoomSession.swift */; };
+		A04 /* SessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B04 /* SessionStore.swift */; };
+		A05 /* RoomCaptureModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B05 /* RoomCaptureModel.swift */; };
+		A06 /* RoomCaptureRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = B06 /* RoomCaptureRepresentable.swift */; };
+		A07 /* ScanFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B07 /* ScanFlowView.swift */; };
+		A08 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B08 /* LibraryView.swift */; };
+		A09 /* RoomViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B09 /* RoomViewerView.swift */; };
+		A0A /* ARWalkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0A /* ARWalkView.swift */; };
+		A0B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B0B /* Assets.xcassets */; };
+		A0C /* RoomPlan.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0C /* RoomPlan.framework */; };
+		A0D /* RealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0D /* RealityKit.framework */; };
+		A0E /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0E /* ARKit.framework */; };
+		A0F /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0F /* CoreMotion.framework */; };
+		A11 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B11 /* OnboardingView.swift */; };
+		A12 /* MainHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12 /* MainHubView.swift */; };
+		A13 /* RulerToolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13 /* RulerToolView.swift */; };
+		A14 /* LevelToolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B14 /* LevelToolView.swift */; };
+		A15 /* AreaToolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15 /* AreaToolView.swift */; };
+		A16 /* FloorPlanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B16 /* FloorPlanView.swift */; };
+		A17 /* ImageTo3DView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B17 /* ImageTo3DView.swift */; };
+		A18 /* TextTo3DView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B18 /* TextTo3DView.swift */; };
+		A1A /* RoomPlanHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A /* RoomPlanHubView.swift */; };
+		A1B /* RoomPlannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B /* RoomPlannerView.swift */; };
+		A1C /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C /* AppTheme.swift */; };
+		A1D /* EnviroMapLogo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D /* EnviroMapLogo.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		B01 /* EnviroMapApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnviroMapApp.swift; sourceTree = "<group>"; };
+		B02 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		B03 /* RoomSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomSession.swift; sourceTree = "<group>"; };
+		B04 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionStore.swift; sourceTree = "<group>"; };
+		B05 /* RoomCaptureModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomCaptureModel.swift; sourceTree = "<group>"; };
+		B06 /* RoomCaptureRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomCaptureRepresentable.swift; sourceTree = "<group>"; };
+		B07 /* ScanFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanFlowView.swift; sourceTree = "<group>"; };
+		B08 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		B09 /* RoomViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomViewerView.swift; sourceTree = "<group>"; };
+		B0A /* ARWalkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARWalkView.swift; sourceTree = "<group>"; };
+		B0B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B0C /* RoomPlan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RoomPlan.framework; path = System/Library/Frameworks/RoomPlan.framework; sourceTree = SDKROOT; };
+		B0D /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = System/Library/Frameworks/RealityKit.framework; sourceTree = SDKROOT; };
+		B0E /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = System/Library/Frameworks/ARKit.framework; sourceTree = SDKROOT; };
+		B0F /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = System/Library/Frameworks/CoreMotion.framework; sourceTree = SDKROOT; };
+		B10 /* EnviroMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EnviroMap.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B11 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		B12 /* MainHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainHubView.swift; sourceTree = "<group>"; };
+		B13 /* RulerToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RulerToolView.swift; sourceTree = "<group>"; };
+		B14 /* LevelToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelToolView.swift; sourceTree = "<group>"; };
+		B15 /* AreaToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AreaToolView.swift; sourceTree = "<group>"; };
+		B16 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanView.swift; sourceTree = "<group>"; };
+		B17 /* ImageTo3DView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTo3DView.swift; sourceTree = "<group>"; };
+		B18 /* TextTo3DView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextTo3DView.swift; sourceTree = "<group>"; };
+		B1A /* RoomPlanHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomPlanHubView.swift; sourceTree = "<group>"; };
+		B1B /* RoomPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomPlannerView.swift; sourceTree = "<group>"; };
+		B1C /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		B1D /* EnviroMapLogo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnviroMapLogo.swift; sourceTree = "<group>"; };
+		B1E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C01 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0C /* RoomPlan.framework in Frameworks */,
+				A0D /* RealityKit.framework in Frameworks */,
+				A0E /* ARKit.framework in Frameworks */,
+				A0F /* CoreMotion.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		D01 = {
+			isa = PBXGroup;
+			children = (
+				D02 /* EnviroMap */,
+				D09 /* Frameworks */,
+				D0A /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		D02 /* EnviroMap */ = {
+			isa = PBXGroup;
+			children = (
+				B01 /* EnviroMapApp.swift */,
+				B02 /* RootView.swift */,
+				B12 /* MainHubView.swift */,
+				B11 /* OnboardingView.swift */,
+				B1C /* AppTheme.swift */,
+				B1D /* EnviroMapLogo.swift */,
+				B1A /* RoomPlanHubView.swift */,
+				B1B /* RoomPlannerView.swift */,
+				B13 /* RulerToolView.swift */,
+				B14 /* LevelToolView.swift */,
+				B15 /* AreaToolView.swift */,
+				B16 /* FloorPlanView.swift */,
+				B17 /* ImageTo3DView.swift */,
+				B18 /* TextTo3DView.swift */,
+				D03 /* Models */,
+				D04 /* Storage */,
+				D05 /* Capture */,
+				D06 /* Library */,
+				D07 /* Viewer */,
+				B0B /* Assets.xcassets */,
+				B1E /* Info.plist */,
+			);
+			path = EnviroMap;
+			sourceTree = "<group>";
+		};
+		D03 /* Models */ = {
+			isa = PBXGroup;
+			children = ( B03 /* RoomSession.swift */, );
+			path = Models;
+			sourceTree = "<group>";
+		};
+		D04 /* Storage */ = {
+			isa = PBXGroup;
+			children = ( B04 /* SessionStore.swift */, );
+			path = Storage;
+			sourceTree = "<group>";
+		};
+		D05 /* Capture */ = {
+			isa = PBXGroup;
+			children = (
+				B05 /* RoomCaptureModel.swift */,
+				B06 /* RoomCaptureRepresentable.swift */,
+				B07 /* ScanFlowView.swift */,
+			);
+			path = Capture;
+			sourceTree = "<group>";
+		};
+		D06 /* Library */ = {
+			isa = PBXGroup;
+			children = ( B08 /* LibraryView.swift */, );
+			path = Library;
+			sourceTree = "<group>";
+		};
+		D07 /* Viewer */ = {
+			isa = PBXGroup;
+			children = (
+				B09 /* RoomViewerView.swift */,
+				B0A /* ARWalkView.swift */,
+			);
+			path = Viewer;
+			sourceTree = "<group>";
+		};
+		D09 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B0C /* RoomPlan.framework */,
+				B0D /* RealityKit.framework */,
+				B0E /* ARKit.framework */,
+				B0F /* CoreMotion.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		D0A /* Products */ = {
+			isa = PBXGroup;
+			children = ( B10 /* EnviroMap.app */, );
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		E01 /* EnviroMap */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F03 /* Build configuration list for PBXNativeTarget "EnviroMap" */;
+			buildPhases = (
+				C02 /* Sources */,
+				C01 /* Frameworks */,
+				C03 /* Resources */,
+			);
+			buildRules = ( );
+			dependencies = ( );
+			name = EnviroMap;
+			productName = EnviroMap;
+			productReference = B10 /* EnviroMap.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		E02 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					E01 = { CreatedOnToolsVersion = 15.0; };
+				};
+			};
+			buildConfigurationList = F01 /* Build configuration list for PBXProject "EnviroMap" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = ( en, Base, );
+			mainGroup = D01;
+			productRefGroup = D0A /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = ( E01 /* EnviroMap */, );
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C03 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ( A0B /* Assets.xcassets in Resources */, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C02 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A01 /* EnviroMapApp.swift in Sources */,
+				A02 /* RootView.swift in Sources */,
+				A03 /* RoomSession.swift in Sources */,
+				A04 /* SessionStore.swift in Sources */,
+				A05 /* RoomCaptureModel.swift in Sources */,
+				A06 /* RoomCaptureRepresentable.swift in Sources */,
+				A07 /* ScanFlowView.swift in Sources */,
+				A08 /* LibraryView.swift in Sources */,
+				A09 /* RoomViewerView.swift in Sources */,
+				A0A /* ARWalkView.swift in Sources */,
+				A11 /* OnboardingView.swift in Sources */,
+				A12 /* MainHubView.swift in Sources */,
+				A13 /* RulerToolView.swift in Sources */,
+				A14 /* LevelToolView.swift in Sources */,
+				A15 /* AreaToolView.swift in Sources */,
+				A16 /* FloorPlanView.swift in Sources */,
+				A17 /* ImageTo3DView.swift in Sources */,
+				A18 /* TextTo3DView.swift in Sources */,
+				A1A /* RoomPlanHubView.swift in Sources */,
+				A1B /* RoomPlannerView.swift in Sources */,
+				A1C /* AppTheme.swift in Sources */,
+				A1D /* EnviroMapLogo.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		F04 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		F05 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F06 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = EnviroMap/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = EnviroMap;
+				INFOPLIST_KEY_NSCameraUsageDescription = "EnviroMap needs the camera for LiDAR RoomPlan scanning and AR walkthroughs.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = ( "$(inherited)", "@executable_path/Frameworks", );
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.enviromap.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F07 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = EnviroMap/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = EnviroMap;
+				INFOPLIST_KEY_NSCameraUsageDescription = "EnviroMap needs the camera for LiDAR RoomPlan scanning and AR walkthroughs.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = ( "$(inherited)", "@executable_path/Frameworks", );
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.enviromap.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		F01 /* Build configuration list for PBXProject "EnviroMap" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = ( F04 /* Debug */, F05 /* Release */, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F03 /* Build configuration list for PBXNativeTarget "EnviroMap" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = ( F06 /* Debug */, F07 /* Release */, );
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = E02 /* Project object */;
+}
