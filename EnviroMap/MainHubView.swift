@@ -64,7 +64,7 @@ struct ToolsHomeView: View {
                         .padding(.top, 10)
 
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Map · Measure · Plan")
+                            Text("Map · Measure · Design")
                                 .font(.system(size: 28, weight: .bold, design: .rounded))
                                 .foregroundStyle(AppTheme.text)
 
