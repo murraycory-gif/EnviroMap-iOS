@@ -37,6 +37,15 @@ final class RoomCaptureModel: ObservableObject {
         refreshSupport()
     }
 
+    private var canStart: Bool {
+        switch phase {
+        case .idle, .failed, .completed:
+            return true
+        case .scanning, .processing:
+            return !didRequestStart
+        }
+    }
+
     func refreshSupport() {
         isSupported = RoomCaptureSession.isSupported
         if !isSupported {
@@ -53,9 +62,12 @@ final class RoomCaptureModel: ObservableObject {
             phase = .failed("RoomPlan needs a LiDAR Pro iPhone.")
             return
         }
-        // Prevent double-start (onAppear + button)
-        guard !didRequestStart || phase == .failed || phase == .idle || phase == .completed else {
+        // Prevent double-start while already scanning
+        switch phase {
+        case .scanning, .processing:
             return
+        case .idle, .failed, .completed:
+            break
         }
         didRequestStart = true
         ignoreSessionErrors = false
@@ -242,7 +254,6 @@ final class RoomCaptureHostController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // Ensure layout is non-zero before any run
         roomCaptureView?.frame = view.bounds
     }
 
@@ -266,13 +277,11 @@ final class RoomCaptureHostController: UIViewController {
             tearDownCaptureView()
         }
 
-        // Wait until view has real size + camera stack released
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.view.layoutIfNeeded()
             self.installCaptureViewIfNeeded()
 
-            // Retry install once if bounds were zero
             if self.roomCaptureView == nil {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                     guard let self else { return }
@@ -398,7 +407,6 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
         didProvide instruction: RoomCaptureSession.Instruction
     ) {
         model?.setInstruction(Self.humanReadable(instruction))
-        // Coaching "normal" means tracking is healthy
         if instruction == .normal {
             model?.setTrackingLabel("Tracking OK")
         } else if instruction == .lowTexture {
