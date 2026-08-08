@@ -22,6 +22,7 @@
 		A0D /* RealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0D /* RealityKit.framework */; };
 		A0E /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0E /* ARKit.framework */; };
 		A0F /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0F /* CoreMotion.framework */; };
+		A0G /* SceneKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B0G /* SceneKit.framework */; };
 		A11 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B11 /* OnboardingView.swift */; };
 		A12 /* MainHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B12 /* MainHubView.swift */; };
 		A13 /* RulerToolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B13 /* RulerToolView.swift */; };
@@ -52,6 +53,7 @@
 		B0D /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = System/Library/Frameworks/RealityKit.framework; sourceTree = SDKROOT; };
 		B0E /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = System/Library/Frameworks/ARKit.framework; sourceTree = SDKROOT; };
 		B0F /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = System/Library/Frameworks/CoreMotion.framework; sourceTree = SDKROOT; };
+		B0G /* SceneKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SceneKit.framework; path = System/Library/Frameworks/SceneKit.framework; sourceTree = SDKROOT; };
 		B10 /* EnviroMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EnviroMap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B11 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		B12 /* MainHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainHubView.swift; sourceTree = "<group>"; };
@@ -77,6 +79,7 @@
 				A0D /* RealityKit.framework in Frameworks */,
 				A0E /* ARKit.framework in Frameworks */,
 				A0F /* CoreMotion.framework in Frameworks */,
+				A0G /* SceneKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -164,6 +167,7 @@
 				B0D /* RealityKit.framework */,
 				B0E /* ARKit.framework */,
 				B0F /* CoreMotion.framework */,
+				B0G /* SceneKit.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
