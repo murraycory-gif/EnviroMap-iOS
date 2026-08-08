@@ -334,14 +334,24 @@ struct SessionRow: View {
     }
 }
 
-// MARK: - Session detail
+// MARK: - Session detail (fullScreenCover — never freezes navigation)
 
-/// Value-based routes — nested NavigationLink(destination:) breaks inside navigationDestination.
-enum SessionAction: String, Hashable {
+enum SessionAction: String, Identifiable, Hashable {
     case planner
     case floorPlan
     case mesh
     case walkAR
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .planner: return "Room Planner"
+        case .floorPlan: return "Floor plan"
+        case .mesh: return "3D mesh"
+        case .walkAR: return "Walk AR"
+        }
+    }
 }
 
 struct SessionDetailView: View {
@@ -353,6 +363,8 @@ struct SessionDetailView: View {
     @State private var draftName = ""
     @State private var showShare = false
     @State private var toast: String?
+    /// Opens destinations as full-screen covers (reliable vs nested NavigationLink)
+    @State private var presentedAction: SessionAction?
 
     private var live: RoomSession {
         store.sessions.first(where: { $0.id == session.id }) ?? session
@@ -381,17 +393,11 @@ struct SessionDetailView: View {
         .navigationTitle(live.name)
         .navigationBarTitleDisplayMode(.inline)
         .tint(AppTheme.blue)
-        .navigationDestination(for: SessionAction.self) { action in
-            switch action {
-            case .planner:
-                RoomPlannerView(session: live)
-            case .floorPlan:
-                FloorPlanView(session: live)
-            case .mesh:
-                RoomViewerView(session: live)
-            case .walkAR:
-                ARWalkView(usdzURL: store.usdzURL(for: live))
+        .fullScreenCover(item: $presentedAction) { action in
+            SessionActionHost(action: action, session: live) {
+                presentedAction = nil
             }
+            .environmentObject(store)
         }
         .alert("Rename", isPresented: $showRename) {
             TextField("Name", text: $draftName)
@@ -525,96 +531,88 @@ struct SessionDetailView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(AppTheme.textSecondary)
 
-            actionLink(
+            actionButton(
                 title: "Room Planner",
                 subtitle: "Place furniture on this room",
                 icon: "square.grid.3x3.topleft.filled",
                 action: .planner
             )
-            actionLink(
+            actionButton(
                 title: "Floor plan",
                 subtitle: "2D walls from LiDAR scan",
                 icon: "square.split.bottomrightquarter",
                 action: .floorPlan
             )
-            actionLink(
+            actionButton(
                 title: "View 3D mesh",
-                subtitle: usdzExists ? "Orbit the USDZ model" : "Mesh file missing",
+                subtitle: usdzExists ? "Orbit the model" : "Mesh file missing",
                 icon: "cube.transparent",
                 action: .mesh,
-                disabled: !usdzExists
+                needsMesh: true
             )
-            actionLink(
+            actionButton(
                 title: "Walk in AR",
                 subtitle: usdzExists ? "Place mesh in real space" : "Mesh file missing",
                 icon: "figure.walk",
                 action: .walkAR,
-                disabled: !usdzExists
+                needsMesh: true
             )
         }
     }
 
-    private func actionLink(
+    private func actionButton(
         title: String,
         subtitle: String,
         icon: String,
         action: SessionAction,
-        disabled: Bool = false
+        needsMesh: Bool = false
     ) -> some View {
-        Group {
-            if disabled {
-                Button {
-                    flash("USDZ not found — rescan this room")
-                } label: {
-                    actionRowLabel(title: title, subtitle: subtitle, icon: icon, chevron: false)
-                        .opacity(0.55)
-                }
-                .buttonStyle(.plain)
-            } else {
-                NavigationLink(value: action) {
-                    actionRowLabel(title: title, subtitle: subtitle, icon: icon, chevron: true)
-                }
-                .buttonStyle(.plain)
+        Button {
+            if needsMesh && !usdzExists {
+                flash("USDZ not found — rescan and save this room")
+                return
             }
-        }
-    }
-
-    private func actionRowLabel(title: String, subtitle: String, icon: String, chevron: Bool) -> some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(AppTheme.blueSoft)
-                    .frame(width: 48, height: 48)
-                Image(systemName: icon)
-                    .font(.body.weight(.semibold))
+            // Small delay so the button highlight finishes before cover animates
+            DispatchQueue.main.async {
+                presentedAction = action
+            }
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(AppTheme.blueSoft)
+                        .frame(width: 48, height: 48)
+                    Image(systemName: icon)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(AppTheme.blue)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(AppTheme.text)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(AppTheme.blue)
             }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(AppTheme.text)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(AppTheme.textSecondary)
-            }
-            Spacer()
-            if chevron {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(AppTheme.textTertiary)
-            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(AppTheme.card)
+                    .shadow(color: AppTheme.blue.opacity(0.05), radius: 10, y: 3)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(AppTheme.cardBorder, lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+            .opacity(needsMesh && !usdzExists ? 0.55 : 1)
         }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(AppTheme.card)
-                .shadow(color: AppTheme.blue.opacity(0.05), radius: 10, y: 3)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(AppTheme.cardBorder, lineWidth: 1)
-                )
-        )
-        .contentShape(Rectangle())
+        .buttonStyle(.plain)
     }
 
     private var manageSection: some View {
@@ -677,6 +675,38 @@ struct SessionDetailView: View {
         withAnimation { toast = msg }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
             withAnimation { toast = nil }
+        }
+    }
+}
+
+// MARK: - Full-screen host with Close button
+
+struct SessionActionHost: View {
+    @EnvironmentObject private var store: SessionStore
+    let action: SessionAction
+    let session: RoomSession
+    var onClose: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                switch action {
+                case .planner:
+                    RoomPlannerView(session: session)
+                case .floorPlan:
+                    FloorPlanView(session: session)
+                case .mesh:
+                    RoomViewerView(session: session)
+                case .walkAR:
+                    ARWalkView(usdzURL: store.usdzURL(for: session))
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { onClose() }
+                        .fontWeight(.semibold)
+                }
+            }
         }
     }
 }

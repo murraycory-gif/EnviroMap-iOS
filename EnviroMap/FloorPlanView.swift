@@ -8,16 +8,37 @@ struct FloorPlanView: View {
     let session: RoomSession
 
     @State private var segments: [FloorSegment] = []
+    @State private var isLoading = true
+    @State private var loadNote: String?
+    @State private var showMesh = false
+    @State private var showWalk = false
 
     var body: some View {
         ZStack {
-            AppTheme.bg.ignoresSafeArea()
+            // Match app blue theme
+            LinearGradient(
+                colors: [
+                    AppTheme.blue.opacity(0.12),
+                    AppTheme.blueSoft.opacity(0.5),
+                    AppTheme.bg,
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
 
             VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    labelChip("3D mesh", icon: "cube.transparent")
+                HStack(spacing: 8) {
+                    labelChip("LiDAR walls", icon: "square.split.2x1")
                     Spacer()
-                    labelChip("2D plan", icon: "square.split.2x1")
+                    if isLoading {
+                        ProgressView()
+                            .scaleEffect(0.85)
+                    } else {
+                        Text(segments.isEmpty ? "Stats only" : "\(segments.count) segments")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AppTheme.textSecondary)
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
@@ -25,16 +46,27 @@ struct FloorPlanView: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .fill(AppTheme.card)
-                        .shadow(color: .black.opacity(0.06), radius: 16, y: 6)
+                        .shadow(color: AppTheme.blue.opacity(0.08), radius: 16, y: 6)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(AppTheme.cardBorder, lineWidth: 1)
+                        )
 
-                    if segments.isEmpty {
+                    if isLoading {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("Building floor plan…")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(AppTheme.textSecondary)
+                        }
+                    } else if segments.isEmpty {
                         VStack(spacing: 12) {
                             Image(systemName: "square.split.bottomrightquarter")
                                 .font(.largeTitle)
                                 .foregroundStyle(AppTheme.blue)
-                            Text("Plan from scan walls")
+                            Text("No wall geometry saved")
                                 .font(.headline)
-                            Text("Open a LiDAR Room Plan scan. Wall layout is built from the saved room model.")
+                            Text(loadNote ?? "This scan has structure counts but no wall file. Stats are shown below.")
                                 .font(.footnote)
                                 .foregroundStyle(AppTheme.textSecondary)
                                 .multilineTextAlignment(.center)
@@ -43,30 +75,31 @@ struct FloorPlanView: View {
                         }
                     } else {
                         FloorPlanCanvas(segments: segments)
-                            .padding(20)
+                            .padding(16)
                     }
                 }
                 .padding(.horizontal, 16)
                 .frame(maxHeight: .infinity)
 
-                VStack(spacing: 10) {
+                VStack(spacing: 12) {
                     Text(session.name)
                         .font(.headline)
+                        .foregroundStyle(AppTheme.text)
                     Text("\(session.wallCount) walls · \(session.doorCount) doors · \(session.windowCount) windows")
                         .font(.caption)
                         .foregroundStyle(AppTheme.textSecondary)
 
                     HStack(spacing: 12) {
-                        NavigationLink {
-                            RoomViewerView(session: session)
+                        Button {
+                            showMesh = true
                         } label: {
                             Label("View 3D", systemImage: "cube")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(PrimaryButtonStyle())
 
-                        NavigationLink {
-                            ARWalkView(usdzURL: store.usdzURL(for: session))
+                        Button {
+                            showWalk = true
                         } label: {
                             Label("Walk AR", systemImage: "figure.walk")
                                 .font(.headline.weight(.semibold))
@@ -86,7 +119,28 @@ struct FloorPlanView: View {
         }
         .navigationTitle("Floor plan")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { loadPlan() }
+        .onAppear { loadPlanAsync() }
+        .fullScreenCover(isPresented: $showMesh) {
+            NavigationStack {
+                RoomViewerView(session: session)
+                    .environmentObject(store)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showMesh = false }
+                        }
+                    }
+            }
+        }
+        .fullScreenCover(isPresented: $showWalk) {
+            NavigationStack {
+                ARWalkView(usdzURL: store.usdzURL(for: session))
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showWalk = false }
+                        }
+                    }
+            }
+        }
     }
 
     private var statsFallback: some View {
@@ -114,15 +168,39 @@ struct FloorPlanView: View {
             .background(AppTheme.blueSoft, in: Capsule())
     }
 
-    private func loadPlan() {
+    /// Decode CapturedRoom on a background queue so the page never freezes.
+    private func loadPlanAsync() {
+        isLoading = true
         let url = store.folderURL(for: session).appendingPathComponent("captured_room.json")
-        guard let data = try? Data(contentsOf: url),
-              let room = try? JSONDecoder().decode(CapturedRoom.self, from: data)
-        else {
-            segments = []
-            return
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let data = try? Data(contentsOf: url)
+            else {
+                DispatchQueue.main.async {
+                    self.segments = []
+                    self.loadNote = "No captured_room.json for this scan."
+                    self.isLoading = false
+                }
+                return
+            }
+
+            do {
+                let room = try JSONDecoder().decode(CapturedRoom.self, from: data)
+                let segs = FloorSegment.from(room: room)
+                DispatchQueue.main.async {
+                    self.segments = segs
+                    self.loadNote = segs.isEmpty ? "Room decoded but no walls found." : nil
+                    self.isLoading = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.segments = []
+                    self.loadNote = "Could not read room file: \(error.localizedDescription)"
+                    self.isLoading = false
+                }
+            }
         }
-        segments = FloorSegment.from(room: room)
     }
 }
 
@@ -212,7 +290,7 @@ struct FloorPlanCanvas: View {
 
             ZStack {
                 Path { p in
-                    let step: CGFloat = 0.5 * scale
+                    let step: CGFloat = max(0.5 * scale, 12)
                     var x = pad
                     while x < geo.size.width - pad {
                         p.move(to: CGPoint(x: x, y: pad))
@@ -226,7 +304,7 @@ struct FloorPlanCanvas: View {
                         y += step
                     }
                 }
-                .stroke(AppTheme.blueSoft, lineWidth: 1)
+                .stroke(AppTheme.blue.opacity(0.08), lineWidth: 1)
 
                 ForEach(segments) { seg in
                     Path { p in
