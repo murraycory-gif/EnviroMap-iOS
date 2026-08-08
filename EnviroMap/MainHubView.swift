@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Main shell: Tools hub + Library.
+/// Main shell: simple Home + My Rooms.
 struct MainHubView: View {
     @EnvironmentObject private var store: SessionStore
     @State private var tab: Tab = .tools
@@ -11,15 +11,15 @@ struct MainHubView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            ToolsHomeView()
+            ToolsHomeView(switchToLibrary: { tab = .library })
                 .tabItem {
-                    Label("Tools", systemImage: "square.grid.2x2.fill")
+                    Label("Home", systemImage: "house.fill")
                 }
                 .tag(Tab.tools)
 
             LibraryView()
                 .tabItem {
-                    Label("Library", systemImage: "building.2.fill")
+                    Label("My Rooms", systemImage: "building.2.fill")
                 }
                 .tag(Tab.library)
         }
@@ -27,22 +27,15 @@ struct MainHubView: View {
     }
 }
 
-// MARK: - Tools home
+// MARK: - Super-simple home
 
 struct ToolsHomeView: View {
     @EnvironmentObject private var store: SessionStore
+    var switchToLibrary: () -> Void = {}
+
     @State private var showScanner = false
     @State private var path = NavigationPath()
     @State private var chipAlert: String?
-
-    private let tools: [ToolItem] = [
-        .init(id: .roomPlan, title: "Room Plan", subtitle: "Planner + LiDAR", icon: "square.split.bottomrightquarter.fill", color: AppTheme.blue),
-        .init(id: .ruler, title: "Ruler", subtitle: "AR distance", icon: "ruler", color: Color(red: 0.2, green: 0.55, blue: 0.95)),
-        .init(id: .level, title: "Level", subtitle: "Surface level", icon: "level", color: Color(red: 0.15, green: 0.6, blue: 0.75)),
-        .init(id: .area, title: "Area", subtitle: "Measure sq ft", icon: "triangle", color: Color(red: 0.3, green: 0.45, blue: 0.95)),
-        .init(id: .image3d, title: "Image to 3D", subtitle: "Photo plane", icon: "camera.fill", color: Color(red: 0.35, green: 0.4, blue: 0.9)),
-        .init(id: .text3d, title: "Text to 3D", subtitle: "Describe a room", icon: "textformat", color: Color(red: 0.25, green: 0.5, blue: 0.95)),
-    ]
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -50,134 +43,149 @@ struct ToolsHomeView: View {
                 background.ignoresSafeArea()
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 22) {
-                        HStack(alignment: .center) {
-                            BrandHeader(height: 68)
-                            Spacer(minLength: 8)
-                            Text("Free")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(AppTheme.blue, in: Capsule())
+                    VStack(alignment: .leading, spacing: 20) {
+                        // Brand
+                        HStack {
+                            BrandHeader(height: 56)
+                            Spacer()
                         }
-                        .padding(.top, 10)
+                        .padding(.top, 8)
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Map · Measure · Design")
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
+                        // Plain headline
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("What do you want to do?")
+                                .font(.system(size: 26, weight: .bold, design: .rounded))
                                 .foregroundStyle(AppTheme.text)
-
-                            Text("LiDAR room capture + precision measuring tools — free while in beta.")
+                            Text("Start at step 1. Everything else is optional.")
                                 .font(.subheadline)
                                 .foregroundStyle(AppTheme.textSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
 
+                        // STEP 1 — Scan
+                        stepLabel(1, "Scan a room")
                         Button {
                             showScanner = true
                         } label: {
-                            HStack(spacing: 14) {
-                                ZStack {
-                                    Circle()
-                                        .fill(.white.opacity(0.2))
-                                        .frame(width: 48, height: 48)
-                                    Image(systemName: "camera.viewfinder")
-                                        .font(.title3.weight(.bold))
-                                        .foregroundStyle(.white)
-                                }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Scan environment")
-                                        .font(.headline.weight(.bold))
-                                    Text("Full LiDAR RoomPlan mesh")
-                                        .font(.caption)
-                                        .opacity(0.9)
-                                }
-                                Spacer()
-                                Image(systemName: "arrow.right")
-                                    .font(.body.weight(.semibold))
-                            }
-                            .foregroundStyle(.white)
-                            .padding(16)
-                            .background(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .fill(
-                                        LinearGradient(
-                                            colors: [AppTheme.blue, AppTheme.blueDeep],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                                    .shadow(color: AppTheme.blue.opacity(0.35), radius: 16, y: 8)
+                            bigPrimary(
+                                title: "Scan a room",
+                                subtitle: "Use the camera to map your space",
+                                icon: "camera.viewfinder"
                             )
                         }
                         .buttonStyle(.plain)
 
-                        // Action chips (wired)
-                        HStack(spacing: 10) {
-                            Button {
-                                showScanner = true
-                            } label: {
-                                highlightChip(icon: "wave.3.right", title: "LiDAR")
+                        // STEP 2 — After scanning
+                        stepLabel(2, "Then open your room")
+                        VStack(spacing: 10) {
+                            simpleRow(
+                                title: "My saved rooms",
+                                subtitle: store.sessions.isEmpty
+                                    ? "None yet — scan first"
+                                    : "\(store.sessions.count) saved on this phone",
+                                icon: "building.2.fill",
+                                color: AppTheme.blue
+                            ) {
+                                switchToLibrary()
                             }
-                            .buttonStyle(.plain)
 
-                            Button {
+                            simpleRow(
+                                title: "See 3D room",
+                                subtitle: "Look at your scan from all sides",
+                                icon: "cube.fill",
+                                color: Color(red: 0.25, green: 0.5, blue: 0.95)
+                            ) {
                                 openLatestMesh()
-                            } label: {
-                                highlightChip(icon: "cube", title: "3D Mesh")
                             }
-                            .buttonStyle(.plain)
 
-                            Button {
+                            simpleRow(
+                                title: "Walk in AR",
+                                subtitle: "Stand in the real room and walk the model",
+                                icon: "figure.walk",
+                                color: Color(red: 0.2, green: 0.55, blue: 0.85)
+                            ) {
                                 openLatestWalkAR()
-                            } label: {
-                                highlightChip(icon: "figure.walk", title: "Walk AR")
                             }
-                            .buttonStyle(.plain)
+
+                            simpleRow(
+                                title: "Design the room",
+                                subtitle: "Add furniture · floor plan · planner",
+                                icon: "sofa.fill",
+                                color: Color(red: 0.3, green: 0.45, blue: 0.95)
+                            ) {
+                                path.append(ToolRoute.roomPlan)
+                            }
                         }
 
-                        Text("Advanced tools")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(AppTheme.textSecondary)
-                            .padding(.top, 4)
+                        // STEP 3 — Measure
+                        stepLabel(3, "Measure (optional)")
+                        VStack(spacing: 10) {
+                            simpleRow(
+                                title: "Ruler",
+                                subtitle: "Measure how far something is",
+                                icon: "ruler",
+                                color: Color(red: 0.2, green: 0.55, blue: 0.95)
+                            ) {
+                                path.append(ToolRoute.ruler)
+                            }
+                            simpleRow(
+                                title: "Level",
+                                subtitle: "Check if a surface is flat",
+                                icon: "level",
+                                color: Color(red: 0.15, green: 0.6, blue: 0.75)
+                            ) {
+                                path.append(ToolRoute.level)
+                            }
+                            simpleRow(
+                                title: "Area",
+                                subtitle: "Find square feet of a space",
+                                icon: "square.dashed",
+                                color: Color(red: 0.3, green: 0.45, blue: 0.95)
+                            ) {
+                                path.append(ToolRoute.area)
+                            }
+                        }
 
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.flexible(), spacing: 12),
-                                GridItem(.flexible(), spacing: 12),
-                            ],
-                            spacing: 12
-                        ) {
-                            ForEach(tools) { tool in
-                                Button {
-                                    handle(tool.id)
+                        // More
+                        stepLabel(nil, "More tools")
+                        VStack(spacing: 10) {
+                            simpleRow(
+                                title: "Photo to 3D",
+                                subtitle: "Turn a picture into a simple 3D shape",
+                                icon: "camera.fill",
+                                color: Color(red: 0.35, green: 0.4, blue: 0.9)
+                            ) {
+                                path.append(ToolRoute.image3d)
+                            }
+                            simpleRow(
+                                title: "Words to 3D",
+                                subtitle: "Type a room idea and preview it",
+                                icon: "textformat",
+                                color: Color(red: 0.25, green: 0.5, blue: 0.95)
+                            ) {
+                                path.append(ToolRoute.text3d)
+                            }
+                        }
+
+                        // Recent (if any)
+                        if !store.sessions.isEmpty {
+                            stepLabel(nil, "Recent rooms")
+                            ForEach(store.sessions.prefix(3)) { session in
+                                NavigationLink {
+                                    SessionDetailView(session: session)
                                 } label: {
-                                    ToolCard(tool: tool)
+                                    SessionRow(session: session)
                                 }
                                 .buttonStyle(.plain)
                             }
                         }
 
-                        if !store.sessions.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Text("Recent scans")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(AppTheme.textSecondary)
-                                ForEach(store.sessions.prefix(3)) { session in
-                                    NavigationLink {
-                                        SessionDetailView(session: session)
-                                    } label: {
-                                        SessionRow(session: session)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.top, 8)
-                        }
+                        Text("Tip: Scan first. Then open My Rooms to view, design, or walk.")
+                            .font(.caption)
+                            .foregroundStyle(AppTheme.textTertiary)
+                            .padding(.top, 4)
                     }
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 32)
+                    .padding(.bottom, 36)
                 }
             }
             .navigationBarHidden(true)
@@ -213,13 +221,19 @@ struct ToolsHomeView: View {
                     if let s = store.sessions.first(where: { $0.id == id }) {
                         RoomViewerView(session: s)
                     } else {
-                        needScanPlaceholder(title: "3D Mesh", message: "Scan a room first, then open its 3D mesh here.")
+                        needScanPlaceholder(
+                            title: "See 3D room",
+                            message: "Scan a room first. Then come back here to look at it in 3D."
+                        )
                     }
                 case .walkAR(let id):
                     if let s = store.sessions.first(where: { $0.id == id }) {
                         ARWalkView(usdzURL: store.usdzURL(for: s))
                     } else {
-                        needScanPlaceholder(title: "Walk AR", message: "Scan a room first, then walk through it in AR.")
+                        needScanPlaceholder(
+                            title: "Walk in AR",
+                            message: "Scan a room first. Then you can walk through it with the camera."
+                        )
                     }
                 case .pickSession(let purpose):
                     SessionPickerView(purpose: purpose)
@@ -244,9 +258,111 @@ struct ToolsHomeView: View {
         }
     }
 
+    // MARK: UI pieces
+
+    private func stepLabel(_ number: Int?, _ text: String) -> some View {
+        HStack(spacing: 10) {
+            if let number {
+                Text("\(number)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(AppTheme.blue, in: Circle())
+            }
+            Text(text)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AppTheme.textSecondary)
+            Spacer()
+        }
+        .padding(.top, 6)
+    }
+
+    private func bigPrimary(title: String, subtitle: String, icon: String) -> some View {
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(.white.opacity(0.22))
+                    .frame(width: 56, height: 56)
+                Image(systemName: icon)
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.title3.weight(.bold))
+                Text(subtitle)
+                    .font(.subheadline)
+                    .opacity(0.92)
+            }
+            Spacer()
+            Image(systemName: "arrow.right.circle.fill")
+                .font(.title2)
+                .opacity(0.9)
+        }
+        .foregroundStyle(.white)
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [AppTheme.blue, AppTheme.blueDeep],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .shadow(color: AppTheme.blue.opacity(0.35), radius: 16, y: 8)
+        )
+    }
+
+    private func simpleRow(
+        title: String,
+        subtitle: String,
+        icon: String,
+        color: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(color.opacity(0.14))
+                        .frame(width: 52, height: 52)
+                    Image(systemName: icon)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(color)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(AppTheme.text)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AppTheme.textTertiary)
+            }
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(AppTheme.card)
+                    .shadow(color: AppTheme.blue.opacity(0.05), radius: 10, y: 3)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .stroke(AppTheme.cardBorder, lineWidth: 1)
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func needScanPlaceholder(title: String, message: String) -> some View {
         VStack(spacing: 16) {
-            Image(systemName: "cube.transparent")
+            Image(systemName: "camera.viewfinder")
                 .font(.system(size: 48))
                 .foregroundStyle(AppTheme.blue)
             Text(title)
@@ -256,7 +372,7 @@ struct ToolsHomeView: View {
                 .foregroundStyle(AppTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
-            Button("Scan environment") {
+            Button("Scan a room") {
                 showScanner = true
             }
             .buttonStyle(PrimaryButtonStyle())
@@ -273,47 +389,27 @@ struct ToolsHomeView: View {
             AppTheme.bg
             LinearGradient(
                 colors: [
-                    AppTheme.blue.opacity(0.16),
-                    AppTheme.blueSoft.opacity(0.55),
+                    AppTheme.blue.opacity(0.14),
+                    AppTheme.blueSoft.opacity(0.5),
                     AppTheme.bg,
-                    Color(red: 0.94, green: 0.96, blue: 1.0),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             Circle()
-                .fill(AppTheme.blue.opacity(0.12))
-                .frame(width: 300, height: 300)
-                .blur(radius: 55)
-                .offset(x: 120, y: -180)
+                .fill(AppTheme.blue.opacity(0.10))
+                .frame(width: 280, height: 280)
+                .blur(radius: 50)
+                .offset(x: 110, y: -160)
         }
     }
 
-    private func highlightChip(icon: String, title: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.caption.weight(.semibold))
-            Text(title)
-                .font(.caption.weight(.semibold))
-        }
-        .foregroundStyle(AppTheme.blue)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(AppTheme.card.opacity(0.9))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(AppTheme.cardBorder, lineWidth: 1)
-                )
-        )
-        .contentShape(Rectangle())
-    }
+    // MARK: Actions (same as before — all still work)
 
     private func openLatestMesh() {
         store.loadIndex()
         if store.sessions.isEmpty {
-            chipAlert = "Scan a room with LiDAR first. Then 3D Mesh opens that capture."
+            chipAlert = "First scan a room. Then you can see it in 3D."
             return
         }
         if store.sessions.count == 1, let s = store.sessions.first {
@@ -326,30 +422,13 @@ struct ToolsHomeView: View {
     private func openLatestWalkAR() {
         store.loadIndex()
         if store.sessions.isEmpty {
-            chipAlert = "Scan a room with LiDAR first. Then Walk AR lets you walk that mesh."
+            chipAlert = "First scan a room. Then you can walk in AR."
             return
         }
         if store.sessions.count == 1, let s = store.sessions.first {
             path.append(ToolRoute.walkAR(s.id))
         } else {
             path.append(ToolRoute.pickSession(.walkAR))
-        }
-    }
-
-    private func handle(_ id: ToolID) {
-        switch id {
-        case .roomPlan:
-            path.append(ToolRoute.roomPlan)
-        case .ruler:
-            path.append(ToolRoute.ruler)
-        case .level:
-            path.append(ToolRoute.level)
-        case .area:
-            path.append(ToolRoute.area)
-        case .image3d:
-            path.append(ToolRoute.image3d)
-        case .text3d:
-            path.append(ToolRoute.text3d)
         }
     }
 }
@@ -362,8 +441,8 @@ enum SessionPickPurpose: String, Hashable {
 
     var title: String {
         switch self {
-        case .mesh: return "Open 3D mesh"
-        case .walkAR: return "Walk in AR"
+        case .mesh: return "Pick a room"
+        case .walkAR: return "Pick a room"
         }
     }
 }
@@ -389,9 +468,9 @@ struct SessionPickerView: View {
                     }
                 }
             } header: {
-                Text("Choose a saved room")
+                Text("Tap a room")
             } footer: {
-                Text("These are LiDAR scans saved on this iPhone.")
+                Text("These are rooms you scanned on this phone.")
             }
         }
         .navigationTitle(purpose.title)
@@ -399,9 +478,9 @@ struct SessionPickerView: View {
         .overlay {
             if store.sessions.isEmpty {
                 ContentUnavailableView(
-                    "No scans yet",
-                    systemImage: "cube.transparent",
-                    description: Text("Use Scan environment or the LiDAR chip first.")
+                    "No rooms yet",
+                    systemImage: "camera.viewfinder",
+                    description: Text("Go back and tap Scan a room.")
                 )
             }
         }
@@ -418,14 +497,6 @@ struct SessionPickerView: View {
     }
 }
 
-struct ToolItem: Identifiable {
-    let id: ToolID
-    let title: String
-    let subtitle: String
-    let icon: String
-    let color: Color
-}
-
 enum ToolID: String, Hashable {
     case roomPlan, ruler, level, area, image3d, text3d
 }
@@ -439,38 +510,4 @@ enum ToolRoute: Hashable {
     case mesh(UUID)
     case walkAR(UUID)
     case pickSession(SessionPickPurpose)
-}
-
-private struct ToolCard: View {
-    let tool: ToolItem
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(tool.color.opacity(0.12))
-                    .frame(width: 48, height: 48)
-                Image(systemName: tool.icon)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(tool.color)
-            }
-            Text(tool.title)
-                .font(.headline)
-                .foregroundStyle(AppTheme.text)
-            Text(tool.subtitle)
-                .font(.caption)
-                .foregroundStyle(AppTheme.textSecondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(AppTheme.card.opacity(0.95))
-                .shadow(color: AppTheme.blue.opacity(0.06), radius: 12, y: 4)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(AppTheme.cardBorder, lineWidth: 1)
-                )
-        )
-    }
 }
