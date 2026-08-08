@@ -1,6 +1,7 @@
 import SwiftUI
 import RoomPlan
 
+/// Full-screen LiDAR RoomPlan capture → process → save to library.
 struct ScanFlowView: View {
     @EnvironmentObject private var store: SessionStore
     @Environment(\.dismiss) private var dismiss
@@ -22,6 +23,14 @@ struct ScanFlowView: View {
                     unsupportedView
                 }
 
+                if model.phase == .scanning || model.phase == .processing {
+                    VStack {
+                        liveStatsBar
+                            .padding(.top, 8)
+                        Spacer()
+                    }
+                }
+
                 VStack(spacing: 0) {
                     Spacer()
                     bottomBar
@@ -35,18 +44,28 @@ struct ScanFlowView: View {
                         model.cancel()
                         dismiss()
                     }
+                    .foregroundStyle(.white)
                 }
             }
+            .toolbarBackground(.hidden, for: .navigationBar)
             .onAppear {
+                model.refreshSupport()
                 if model.isSupported, model.phase == .idle {
-                    // Brief delay so RoomCaptureView is in the hierarchy
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
                         model.start()
                     }
                 }
             }
+            .onDisappear {
+                if model.phase == .scanning || model.phase == .processing {
+                    model.cancel()
+                }
+            }
             .onChange(of: model.phase) { newPhase in
                 if newPhase == .completed {
+                    if name.isEmpty {
+                        name = defaultScanName()
+                    }
                     showSaveSheet = true
                 }
             }
@@ -62,6 +81,7 @@ struct ScanFlowView: View {
                 Text(saveError ?? "")
             }
         }
+        .preferredColorScheme(.dark)
     }
 
     private var navTitle: String {
@@ -74,16 +94,40 @@ struct ScanFlowView: View {
         }
     }
 
+    private var liveStatsBar: some View {
+        HStack(spacing: 8) {
+            statPill("Walls", model.liveWalls)
+            statPill("Doors", model.liveDoors)
+            statPill("Windows", model.liveWindows)
+            statPill("Objects", model.liveObjects)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func statPill(_ label: String, _ value: Int) -> some View {
+        VStack(spacing: 2) {
+            Text("\(value)")
+                .font(.headline.monospacedDigit().weight(.bold))
+                .foregroundStyle(.white)
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private var bottomBar: some View {
         VStack(spacing: 12) {
             Text(model.instruction)
-                .font(.caption.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
                 .multilineTextAlignment(.center)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial, in: Capsule())
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Group {
                 switch model.phase {
@@ -92,61 +136,78 @@ struct ScanFlowView: View {
                         model.stop()
                     } label: {
                         Label("Done scanning", systemImage: "checkmark.circle.fill")
+                            .font(.headline.weight(.bold))
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 0.37, green: 0.92, blue: 0.83))
+                    .tint(Color(red: 0.25, green: 0.85, blue: 0.55))
                     .foregroundStyle(.black)
                     .controlSize(.large)
 
                 case .processing:
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         ProgressView()
+                            .tint(.white)
                         Text("Building LiDAR mesh…")
-                            .font(.subheadline.weight(.medium))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
 
                 case .failed(let message):
-                    VStack(spacing: 10) {
+                    VStack(spacing: 12) {
                         Text(message)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white.opacity(0.85))
                             .multilineTextAlignment(.center)
-                        Button("Try again") {
+                        Button {
                             model.reset()
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                                 model.start()
                             }
+                        } label: {
+                            Label("Try again", systemImage: "arrow.clockwise")
+                                .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(AppTheme.blue)
+                        .controlSize(.large)
                     }
 
                 case .completed:
                     Button {
                         showSaveSheet = true
                     } label: {
-                        Label("Save room", systemImage: "square.and.arrow.down")
+                        Label("Save room", systemImage: "square.and.arrow.down.fill")
+                            .font(.headline.weight(.bold))
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.blue)
                     .controlSize(.large)
 
                 case .idle:
-                    Button("Start scan") { model.start() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
+                    Button {
+                        model.start()
+                    } label: {
+                        Label("Start LiDAR scan", systemImage: "camera.viewfinder")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AppTheme.blue)
+                    .controlSize(.large)
                 }
             }
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 20)
+        .padding(.bottom, 24)
         .padding(.top, 12)
         .background(
             LinearGradient(
-                colors: [.clear, .black.opacity(0.65)],
+                colors: [.clear, .black.opacity(0.75)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -158,22 +219,22 @@ struct ScanFlowView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Name", text: $name, prompt: Text("Living room, office…"))
+                    TextField("Name", text: $name, prompt: Text("Living room, kitchen…"))
                     TextField("Notes", text: $notes, prompt: Text("Optional"), axis: .vertical)
                         .lineLimit(2...5)
                 } header: {
                     Text("Save this environment")
                 } footer: {
-                    Text("Stored on this iPhone. Reopen anytime to view the mesh or walk in AR.")
+                    Text("Mesh is stored on this iPhone as USDZ. Reopen anytime for 3D, floor plan, planner, or Walk AR.")
                 }
 
                 if let room = model.finalRoom {
-                    Section("Detected structure") {
+                    Section("LiDAR structure") {
                         LabeledContent("Walls", value: "\(room.walls.count)")
-                        LabeledContent("Objects", value: "\(room.objects.count)")
                         LabeledContent("Doors", value: "\(room.doors.count)")
                         LabeledContent("Windows", value: "\(room.windows.count)")
                         LabeledContent("Openings", value: "\(room.openings.count)")
+                        LabeledContent("Objects", value: "\(room.objects.count)")
                     }
                 }
             }
@@ -199,24 +260,35 @@ struct ScanFlowView: View {
     }
 
     private var unsupportedView: some View {
-        ContentUnavailableView {
-            Label("LiDAR required", systemImage: "camera.viewfinder")
-        } description: {
-            Text("RoomPlan needs an iPhone or iPad with a LiDAR scanner. Run on a physical Pro device — not the Simulator.")
-        } actions: {
-            Button("Close") { dismiss() }
-                .buttonStyle(.borderedProminent)
+        ZStack {
+            AppTheme.bg.ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "camera.viewfinder")
+                    .font(.system(size: 56))
+                    .foregroundStyle(AppTheme.blue)
+                Text("LiDAR required")
+                    .font(.title2.weight(.bold))
+                Text("Real RoomPlan scanning needs an iPhone or iPad with a LiDAR scanner (Pro models). The Simulator cannot capture rooms.")
+                    .font(.subheadline)
+                    .foregroundStyle(AppTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+                Button("Close") { dismiss() }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .padding(.horizontal, 40)
+            }
         }
     }
 
     private func save() {
         guard let room = model.finalRoom else { return }
+        let thumb = model.viewController.snapshotThumbnail()
         do {
             _ = try store.saveCapturedRoom(
                 room,
                 name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                 notes: notes,
-                previewImage: nil
+                previewImage: thumb
             )
             didSave = true
             showSaveSheet = false
@@ -225,5 +297,11 @@ struct ScanFlowView: View {
         } catch {
             saveError = error.localizedDescription
         }
+    }
+
+    private func defaultScanName() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d · h:mm a"
+        return "Room \(f.string(from: Date()))"
     }
 }

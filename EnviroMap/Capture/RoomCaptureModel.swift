@@ -2,9 +2,11 @@ import Foundation
 import RoomPlan
 import UIKit
 import Combine
+import ARKit
 
-// MARK: - SwiftUI model (plain class — no NSObject)
+// MARK: - SwiftUI-facing model (no NSObject)
 
+/// Owns scan state for SwiftUI. Real LiDAR work runs in `RoomCaptureHostController`.
 final class RoomCaptureModel: ObservableObject {
     enum Phase: Equatable {
         case idle
@@ -18,109 +20,165 @@ final class RoomCaptureModel: ObservableObject {
     @Published var finalRoom: CapturedRoom?
     @Published private(set) var isSupported: Bool = RoomCaptureSession.isSupported
     @Published private(set) var instruction: String = "Preparing…"
+    /// Live counts while scanning (from intermediate CapturedRoom updates).
+    @Published private(set) var liveWalls: Int = 0
+    @Published private(set) var liveDoors: Int = 0
+    @Published private(set) var liveWindows: Int = 0
+    @Published private(set) var liveObjects: Int = 0
+    @Published private(set) var isPaused: Bool = false
 
-    /// Host UIViewController that owns RoomCaptureView (Apple's recommended pattern).
+    /// Host that owns RoomCaptureView (Apple’s recommended pattern).
     let viewController = RoomCaptureHostController()
 
     init() {
         viewController.model = self
+        refreshSupport()
+    }
+
+    func refreshSupport() {
+        isSupported = RoomCaptureSession.isSupported
         if !isSupported {
-            instruction = "This device does not support RoomPlan (LiDAR required)."
-        } else {
-            instruction = "Ready"
+            instruction = "This device has no LiDAR — RoomPlan needs iPhone 12 Pro / 13 Pro / 14 Pro / 15 Pro / 16 Pro (or Pro iPad)."
+        } else if phase == .idle {
+            instruction = "Ready — walk slowly around the room"
         }
     }
 
     func start() {
+        refreshSupport()
         guard isSupported else {
             phase = .failed(
-                "RoomPlan needs a LiDAR iPhone or iPad (12 Pro or later Pro models). The Simulator cannot scan."
+                "RoomPlan needs a LiDAR iPhone or iPad (Pro models). The Simulator cannot scan real rooms."
             )
             return
         }
         finalRoom = nil
+        liveWalls = 0
+        liveDoors = 0
+        liveWindows = 0
+        liveObjects = 0
+        isPaused = false
         phase = .scanning
-        instruction = "Move slowly. Point at walls, corners, doors, and windows."
+        instruction = "Point at a wall, then walk the room edges slowly"
         viewController.startSession()
     }
 
+    /// User finished walking — stop capture and process mesh.
     func stop() {
         guard phase == .scanning else { return }
         phase = .processing
-        instruction = "Building mesh from LiDAR…"
-        viewController.stopSession()
+        instruction = "Building LiDAR mesh and structure…"
+        isPaused = false
+        viewController.stopSession(process: true)
     }
 
     func cancel() {
-        viewController.stopSession()
+        viewController.stopSession(process: false)
         phase = .idle
         finalRoom = nil
+        isPaused = false
         instruction = "Cancelled"
+        clearLiveStats()
     }
 
     func reset() {
-        viewController.stopSession()
+        viewController.stopSession(process: false)
         finalRoom = nil
         phase = .idle
-        instruction = "Ready"
+        isPaused = false
+        clearLiveStats()
+        instruction = isSupported ? "Ready — walk slowly around the room" : instruction
     }
 
+    private func clearLiveStats() {
+        liveWalls = 0
+        liveDoors = 0
+        liveWindows = 0
+        liveObjects = 0
+    }
+
+    // MARK: Updates from host (always hop to main)
+
     func setPhase(_ newPhase: Phase, instruction newInstruction: String? = nil) {
-        let apply = { [weak self] in
+        onMain { [weak self] in
             guard let self else { return }
             self.phase = newPhase
             if let newInstruction {
                 self.instruction = newInstruction
             }
         }
-        if Thread.isMainThread {
-            apply()
-        } else {
-            DispatchQueue.main.async(execute: apply)
+    }
+
+    func setInstruction(_ text: String) {
+        onMain { [weak self] in
+            self?.instruction = text
+        }
+    }
+
+    func setPaused(_ paused: Bool) {
+        onMain { [weak self] in
+            self?.isPaused = paused
+            if paused {
+                self?.instruction = "Tracking limited — move slower or add light"
+            }
+        }
+    }
+
+    func updateLive(from room: CapturedRoom) {
+        onMain { [weak self] in
+            guard let self else { return }
+            self.liveWalls = room.walls.count
+            self.liveDoors = room.doors.count
+            self.liveWindows = room.windows.count
+            self.liveObjects = room.objects.count
         }
     }
 
     func setResult(room: CapturedRoom?, error: Error?) {
-        let apply = { [weak self] in
+        onMain { [weak self] in
             guard let self else { return }
             if let error {
                 self.phase = .failed(error.localizedDescription)
-                self.instruction = "Processing failed"
+                self.instruction = "Could not finish processing"
                 return
             }
             guard let room else {
-                self.phase = .failed("No room data returned.")
+                self.phase = .failed("No room data returned from LiDAR.")
+                self.instruction = "Try scanning again — cover every wall"
                 return
             }
             self.finalRoom = room
+            self.liveWalls = room.walls.count
+            self.liveDoors = room.doors.count
+            self.liveWindows = room.windows.count
+            self.liveObjects = room.objects.count
             self.phase = .completed
             self.instruction = "Scan complete — save to reopen later"
         }
+    }
+
+    private func onMain(_ block: @escaping () -> Void) {
         if Thread.isMainThread {
-            apply()
+            block()
         } else {
-            DispatchQueue.main.async(execute: apply)
+            DispatchQueue.main.async(execute: block)
         }
     }
 }
 
-// MARK: - Host controller (UIViewController already conforms to NSCoding)
+// MARK: - Host UIViewController (RoomPlan + ARKit)
 
-/// Matches Apple's RoomPlan sample: UIViewController + RoomCaptureViewDelegate.
-final class RoomCaptureHostController: UIViewController, RoomCaptureViewDelegate {
+/// Apple pattern: UIViewController hosts `RoomCaptureView`, implements delegates.
+final class RoomCaptureHostController: UIViewController {
     weak var model: RoomCaptureModel?
+
     private var roomCaptureView: RoomCaptureView?
     private var isRunning = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
-
-        let capture = RoomCaptureView(frame: view.bounds)
-        capture.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        capture.delegate = self
-        view.addSubview(capture)
-        roomCaptureView = capture
+        installCaptureViewIfNeeded()
     }
 
     override func viewDidLayoutSubviews() {
@@ -128,33 +186,73 @@ final class RoomCaptureHostController: UIViewController, RoomCaptureViewDelegate
         roomCaptureView?.frame = view.bounds
     }
 
+    private func installCaptureViewIfNeeded() {
+        guard roomCaptureView == nil else { return }
+
+        let capture = RoomCaptureView(frame: view.bounds)
+        capture.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        capture.delegate = self
+        view.addSubview(capture)
+        roomCaptureView = capture
+
+        // Live coaching + intermediate room structure
+        capture.captureSession.delegate = self
+    }
+
     func startSession() {
-        if roomCaptureView == nil {
-            loadViewIfNeeded()
+        loadViewIfNeeded()
+        installCaptureViewIfNeeded()
+        guard let roomCaptureView else {
+            model?.setPhase(.failed("Could not create RoomCaptureView."), instruction: "Restart the app and try again")
+            return
         }
-        guard let roomCaptureView else { return }
-        isRunning = true
+
+        if isRunning {
+            roomCaptureView.captureSession.stop()
+            isRunning = false
+        }
+
         let configuration = RoomCaptureSession.Configuration()
+        isRunning = true
         roomCaptureView.captureSession.run(configuration: configuration)
     }
 
-    func stopSession() {
-        guard isRunning else { return }
-        roomCaptureView?.captureSession.stop()
+    /// - Parameter process: if true, RoomPlan builds final CapturedRoom; if false, abandon.
+    func stopSession(process: Bool) {
+        guard let roomCaptureView else { return }
+        guard isRunning || process else {
+            // Already stopped
+            return
+        }
+        // Ends capture; when process path is active, final CapturedRoom arrives via view delegate
+        roomCaptureView.captureSession.stop()
         isRunning = false
     }
 
-    // MARK: RoomCaptureViewDelegate
+    /// Snapshot of the current AR view for library thumbnail (best-effort).
+    func snapshotThumbnail() -> UIImage? {
+        guard let roomCaptureView else { return nil }
+        let bounds = roomCaptureView.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return nil }
+        return UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            roomCaptureView.drawHierarchy(in: bounds, afterScreenUpdates: false)
+        }
+    }
+}
 
+// MARK: RoomCaptureViewDelegate — final mesh / structure
+
+extension RoomCaptureHostController: RoomCaptureViewDelegate {
     func captureView(
         shouldPresent roomDataForProcessing: CapturedRoomData,
         error: Error?
     ) -> Bool {
         if let error {
-            model?.setPhase(.failed(error.localizedDescription))
+            model?.setPhase(.failed(error.localizedDescription), instruction: "Capture error")
             return false
         }
-        model?.setPhase(.processing, instruction: "Processing room structure…")
+        // Returning true lets RoomPlan process LiDAR + structure into CapturedRoom
+        model?.setPhase(.processing, instruction: "Processing walls, doors, and objects…")
         return true
     }
 
@@ -163,5 +261,84 @@ final class RoomCaptureHostController: UIViewController, RoomCaptureViewDelegate
         error: Error?
     ) {
         model?.setResult(room: processedResult, error: error)
+    }
+}
+
+// MARK: RoomCaptureSessionDelegate — live coaching + intermediate structure
+
+extension RoomCaptureHostController: RoomCaptureSessionDelegate {
+    func captureSession(
+        _ session: RoomCaptureSession,
+        didUpdate room: CapturedRoom
+    ) {
+        model?.updateLive(from: room)
+    }
+
+    func captureSession(
+        _ session: RoomCaptureSession,
+        didAdd room: CapturedRoom
+    ) {
+        model?.updateLive(from: room)
+    }
+
+    func captureSession(
+        _ session: RoomCaptureSession,
+        didChange room: CapturedRoom
+    ) {
+        model?.updateLive(from: room)
+    }
+
+    func captureSession(
+        _ session: RoomCaptureSession,
+        didRemove room: CapturedRoom
+    ) {
+        model?.updateLive(from: room)
+    }
+
+    func captureSession(
+        _ session: RoomCaptureSession,
+        didProvide instruction: RoomCaptureSession.Instruction
+    ) {
+        model?.setInstruction(Self.humanReadable(instruction))
+    }
+
+    func captureSession(
+        _ session: RoomCaptureSession,
+        didStartWith configuration: RoomCaptureSession.Configuration
+    ) {
+        model?.setPhase(.scanning, instruction: "LiDAR active — scan every wall and corner")
+    }
+
+    func captureSession(
+        _ session: RoomCaptureSession,
+        didEndWith data: CapturedRoomData,
+        error: Error?
+    ) {
+        if let error {
+            model?.setPhase(.failed(error.localizedDescription), instruction: "Session ended with error")
+        }
+        // Success still finishes via captureView(didPresent:error:) after processing
+    }
+
+    /// Map Apple coaching enums to short user-facing lines.
+    private static func humanReadable(_ instruction: RoomCaptureSession.Instruction) -> String {
+        switch instruction {
+        case .moveCloseToWall:
+            return "Move closer to the wall"
+        case .moveAwayFromWall:
+            return "Step back from the wall"
+        case .slowDown:
+            return "Slow down — move more slowly"
+        case .turnLeft:
+            return "Turn left to continue mapping"
+        case .turnRight:
+            return "Turn right to continue mapping"
+        case .lowTexture:
+            return "Low texture — point at corners, frames, or furniture edges"
+        case .normal:
+            return "Looking good — keep scanning the remaining walls"
+        @unknown default:
+            return "Keep scanning — cover walls, doors, and windows"
+        }
     }
 }
