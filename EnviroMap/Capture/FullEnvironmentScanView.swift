@@ -169,6 +169,24 @@ struct FullEnvironmentScanView: View {
         .padding(.bottom, 28)
     }
 
+    private func viewControl(icon: String, title: String, action: (() -> Void)? = nil) -> some View {
+        Button {
+            action?()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                Text(title)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(action == nil)
+    }
+
     private func metric(_ title: String, _ value: String) -> some View {
         VStack(spacing: 2) {
             Text(value)
@@ -224,17 +242,17 @@ struct FullEnvironmentScanView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
 
-                // Mesh card
+                // Large 3D viewer
                 ZStack {
                     RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous)
                         .fill(Color(red: 0.08, green: 0.09, blue: 0.12))
                         .shadow(color: .black.opacity(0.12), radius: 16, y: 6)
 
                     if let scene = model.previewScene {
-                        PreviewMeshView(scene: scene)
+                        PreviewMeshView(scene: scene, resetToken: model.viewResetToken)
                             .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
                     } else if let url = model.previewMeshURL {
-                        PreviewMeshView(url: url)
+                        PreviewMeshView(url: url, resetToken: model.viewResetToken)
                             .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
                     } else {
                         ProgressView()
@@ -242,26 +260,29 @@ struct FullEnvironmentScanView: View {
                     }
 
                     VStack {
-                        Spacer()
                         HStack {
-                            Label("Drag · Pinch", systemImage: "hand.draw")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(AppTheme.textSecondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(.ultraThinMaterial, in: Capsule())
                             Spacer()
-                            Text("Full Color Mesh")
+                            Text("Full Color")
                                 .font(.caption.weight(.bold))
-                                .foregroundStyle(AppTheme.blue)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(AppTheme.blueSoft, in: Capsule())
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(AppTheme.blue.opacity(0.9), in: Capsule())
                         }
-                        .padding(14)
+                        .padding(12)
+                        Spacer()
+                        // Controls
+                        HStack(spacing: 10) {
+                            viewControl(icon: "arrow.triangle.2.circlepath", title: "Reset") {
+                                model.viewResetToken += 1
+                            }
+                            viewControl(icon: "hand.draw.fill", title: "Drag Spin")
+                            viewControl(icon: "arrow.up.left.and.arrow.down.right", title: "Pinch Zoom")
+                        }
+                        .padding(12)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 12)
                 .frame(maxHeight: .infinity)
 
                 // Bottom save card
@@ -383,56 +404,46 @@ struct FullEnvironmentScanView: View {
 struct PreviewMeshView: UIViewRepresentable {
     var scene: SCNScene? = nil
     var url: URL? = nil
+    var resetToken: Int = 0
 
-    init(scene: SCNScene) {
+    init(scene: SCNScene, resetToken: Int = 0) {
         self.scene = scene
         self.url = nil
+        self.resetToken = resetToken
     }
 
-    init(url: URL) {
+    init(url: URL, resetToken: Int = 0) {
         self.url = url
         self.scene = nil
+        self.resetToken = resetToken
     }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> SCNView {
         let v = SCNView()
-        v.backgroundColor = UIColor(red: 0.10, green: 0.11, blue: 0.14, alpha: 1)
+        v.backgroundColor = UIColor(red: 0.09, green: 0.10, blue: 0.13, alpha: 1)
         v.allowsCameraControl = true
         v.autoenablesDefaultLighting = false
         v.antialiasingMode = .multisampling4X
+        // Natural orbit (turntable) — easier than free camera
+        v.defaultCameraController.interactionMode = .orbitTurntable
+        v.defaultCameraController.inertiaEnabled = true
+        v.defaultCameraController.maximumVerticalAngle = 85
+        v.defaultCameraController.minimumVerticalAngle = -10
+        context.coordinator.scnView = v
 
         if let scene {
             prepare(scene)
             v.scene = scene
-            v.defaultCameraController.automaticTarget = true
-            v.defaultCameraController.inertiaEnabled = true
-            return v
-        }
-
-        if let url {
+            context.coordinator.fitCamera(in: v, scene: scene)
+        } else if let url {
             DispatchQueue.global(qos: .userInitiated).async {
-                // Load atlas next to scn if present
-                let atlasPath = url.deletingLastPathComponent().appendingPathComponent("atlas.png").path
                 if let scene = try? SCNScene(url: url, options: nil) {
-                    // Re-apply atlas texture from file (survives export)
-                    if FileManager.default.fileExists(atPath: atlasPath) {
-                        scene.rootNode.enumerateChildNodes { node, _ in
-                            guard let mats = node.geometry?.materials else { return }
-                            for mat in mats {
-                                mat.lightingModel = .constant
-                                mat.isDoubleSided = true
-                                mat.diffuse.contents = atlasPath
-                                mat.diffuse.magnificationFilter = .nearest
-                                mat.diffuse.minificationFilter = .nearest
-                            }
-                        }
-                    } else {
-                        prepare(scene)
-                    }
+                    prepare(scene)
                     DispatchQueue.main.async {
                         v.scene = scene
-                        v.defaultCameraController.automaticTarget = true
-                        v.defaultCameraController.inertiaEnabled = true
+                        context.coordinator.fitCamera(in: v, scene: scene)
                     }
                 }
             }
@@ -440,20 +451,77 @@ struct PreviewMeshView: UIViewRepresentable {
         return v
     }
 
+    func updateUIView(_ uiView: SCNView, context: Context) {
+        if context.coordinator.lastReset != resetToken {
+            context.coordinator.lastReset = resetToken
+            if let scene = uiView.scene {
+                context.coordinator.fitCamera(in: uiView, scene: scene)
+            }
+        }
+    }
+
     private func prepare(_ scene: SCNScene) {
-        scene.background.contents = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
+        scene.background.contents = UIColor(red: 0.09, green: 0.10, blue: 0.13, alpha: 1)
         scene.rootNode.enumerateChildNodes { node, _ in
             guard let mats = node.geometry?.materials else { return }
             for mat in mats {
-                // Keep solid camera colors — never override diffuse to white
-                mat.lightingModel = .constant
+                // Keep colors; lambert shows form
+                if mat.lightingModel != .lambert {
+                    mat.lightingModel = .lambert
+                }
                 mat.isDoubleSided = true
                 mat.shaderModifiers = [:]
             }
         }
     }
 
-    func updateUIView(_ uiView: SCNView, context: Context) {}
+    final class Coordinator {
+        var scnView: SCNView?
+        var lastReset: Int = -1
+
+        func fitCamera(in view: SCNView, scene: SCNScene) {
+            // Prefer mesh root bounds
+            let target = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
+            let (minB, maxB) = target.boundingBox
+            let center = SCNVector3(
+                (minB.x + maxB.x) * 0.5,
+                (minB.y + maxB.y) * 0.5,
+                (minB.z + maxB.z) * 0.5
+            )
+            let dx = maxB.x - minB.x
+            let dy = maxB.y - minB.y
+            let dz = maxB.z - minB.z
+            let radius = max(max(dx, dy), dz) * 0.55
+            let dist = max(CGFloat(radius) * 2.4, 0.8)
+
+            let cam = SCNNode()
+            cam.camera = SCNCamera()
+            cam.camera?.fieldOfView = 50
+            cam.camera?.zNear = 0.01
+            cam.camera?.zFar = 500
+            cam.position = SCNVector3(
+                center.x + Float(dist) * 0.45,
+                center.y + Float(dist) * 0.35,
+                center.z + Float(dist) * 0.85
+            )
+            // Aim at center without look(at:) API variance
+            let dxp = center.x - cam.position.x
+            let dyp = center.y - cam.position.y
+            let dzp = center.z - cam.position.z
+            let yaw = atan2(dxp, dzp)
+            let pitch = -atan2(dyp, sqrt(dxp * dxp + dzp * dzp))
+            cam.eulerAngles = SCNVector3(pitch, yaw, 0)
+
+            // Replace old camera nodes named previewCam
+            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
+            scene.rootNode.addChildNode(cam)
+            view.pointOfView = cam
+
+            view.defaultCameraController.target = center
+            view.defaultCameraController.maximumLinearAcceleration = 30
+            view.defaultCameraController.inertiaEnabled = true
+        }
+    }
 }
 
 // MARK: - Model
@@ -481,6 +549,7 @@ final class FullEnvironmentScanModel: ObservableObject {
     @Published var exportPayload: ExportPayload?
     @Published var previewMeshURL: URL?
     @Published var previewScene: SCNScene?
+    @Published var viewResetToken: Int = 0
 
     let controller = FullEnvScanController()
 
@@ -521,15 +590,15 @@ final class FullEnvironmentScanModel: ObservableObject {
         guard phase == .scanning else { return }
         phase = .processing
         statusTitle = "Processing"
-        instruction = "Baking photo colors (fast)…"
+        instruction = "Building your 3D view…"
         controller.stopCapturing()
-        // Extra final harvest after a brief settle
         previewImage = controller.snapshot()
         controller.forceFinalHarvest()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let result = self.controller.buildExport()
+            // Build scene only first (fast path to Review)
+            let result = self.controller.buildExportFast()
             DispatchQueue.main.async {
                 if let result {
                     self.exportPayload = result
@@ -537,8 +606,10 @@ final class FullEnvironmentScanModel: ObservableObject {
                     self.previewScene = result.scene
                     self.phase = .preview
                     self.statusTitle = "Review"
-                    self.instruction = "Inspect your full-color scan, then save."
+                    self.instruction = "Drag to spin · Pinch to zoom"
                     self.controller.stop()
+                    // Write file in background so Save is ready without blocking UI
+                    self.controller.persistExportInBackground(result)
                 } else {
                     self.phase = .failed("Not enough mesh. Scan longer and cover more surfaces.")
                 }
@@ -685,14 +756,24 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             .appendingPathComponent("EnviroMapFull_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        // One bake only (concurrent color + write) — much faster Done
-        guard let built = PhotoTexturedMeshBuilder.buildAndExport(
-            chunks: meshChunks,
-            keyframes: frames,
-            to: tmp
-        ) else { return nil }
+        // Scene first (Review), disk write optional/async
+        guard let scene = PhotoTexturedMeshBuilder.makeScene(chunks: meshChunks, keyframes: frames) else {
+            return nil
+        }
+        return .init(directory: tmp, fileName: "room_full.scn", scene: scene)
+    }
 
-        return .init(directory: tmp, fileName: built.fileName, scene: built.scene)
+    /// Write scn after Review is already showing (non-blocking).
+    func persistExportInBackground(_ payload: FullEnvironmentScanModel.ExportPayload) {
+        guard let scene = payload.scene else { return }
+        let dir = payload.directory
+        DispatchQueue.global(qos: .utility).async {
+            _ = PhotoTexturedMeshBuilder.writeScene(scene, to: dir)
+        }
+    }
+
+    func buildExport() -> FullEnvironmentScanModel.ExportPayload? {
+        buildExportFast()
     }
 
 

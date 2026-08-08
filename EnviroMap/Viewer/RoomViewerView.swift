@@ -228,14 +228,28 @@ struct MeshSceneView: UIViewRepresentable {
                         .createNormalsIfAbsent: true,
                     ])
 
-                    // Keep solid camera colors from export
+                    // Lambert + lights so shape is readable
                     scene.rootNode.enumerateChildNodes { node, _ in
                         guard let geos = node.geometry else { return }
                         for mat in geos.materials {
-                            mat.lightingModel = .constant
+                            mat.lightingModel = .lambert
                             mat.isDoubleSided = true
                             mat.shaderModifiers = [:]
                         }
+                    }
+                    if scene.rootNode.childNode(withName: "keyLight", recursively: false) == nil {
+                        let key = SCNNode()
+                        key.name = "keyLight"
+                        key.light = SCNLight()
+                        key.light?.type = .directional
+                        key.light?.intensity = 650
+                        key.eulerAngles = SCNVector3(Float(-0.65), Float(0.45), Float(0))
+                        scene.rootNode.addChildNode(key)
+                        let amb = SCNNode()
+                        amb.light = SCNLight()
+                        amb.light?.type = .ambient
+                        amb.light?.intensity = 550
+                        scene.rootNode.addChildNode(amb)
                     }
 
                     // Soft ground only when not already a dense floor mesh
