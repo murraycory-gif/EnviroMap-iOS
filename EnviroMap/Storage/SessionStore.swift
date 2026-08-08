@@ -156,14 +156,15 @@ final class SessionStore: ObservableObject {
         }
         try fileManager.copyItem(at: src, to: dest)
 
-        // Color atlas (required for colored mesh reload)
-        let atlasSrc = sourceDirectory.appendingPathComponent("atlas.png")
-        let atlasDest = folder.appendingPathComponent("atlas.png")
-        if fileManager.fileExists(atPath: atlasSrc.path) {
-            if fileManager.fileExists(atPath: atlasDest.path) {
-                try? fileManager.removeItem(at: atlasDest)
+        // Photo textures + optional atlas
+        if let files = try? fileManager.contentsOfDirectory(at: sourceDirectory, includingPropertiesForKeys: nil) {
+            for f in files {
+                let name = f.lastPathComponent
+                guard name.hasPrefix("tex_") || name == "atlas.png" || name == "color_proof.png" else { continue }
+                let dest = folder.appendingPathComponent(name)
+                if fileManager.fileExists(atPath: dest.path) { try? fileManager.removeItem(at: dest) }
+                try? fileManager.copyItem(at: f, to: dest)
             }
-            try? fileManager.copyItem(at: atlasSrc, to: atlasDest)
         }
 
         if let image = preview, let jpeg = image.jpegData(compressionQuality: 0.75) {

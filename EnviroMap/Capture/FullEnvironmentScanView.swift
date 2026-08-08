@@ -566,7 +566,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Yellow dots = tracking. Mesh number rises as surfaces are saved. Get close and circle each item."
+        instruction = "Move slowly. Yellow dots = tracking. Mesh count rises as space is saved."
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
@@ -653,8 +653,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 120
-    private let maxChunks = 1200
+    private let maxKeyframes = 36
+    private let maxChunks = 500
     private var coverageRoot: SCNNode?
     private var lastMarkerUpdate: TimeInterval = 0
 
@@ -760,19 +760,32 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             .appendingPathComponent("EnviroMapFull_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        // Scene only — Review shows immediately; disk write is async
+        // Build photo-textured scene once (writes tex_*.jpg into tmp when dir provided via export)
+        // Fast path: makeScene without writing files; textures stay in memory for Review
         guard let scene = PhotoTexturedMeshBuilder.makeScene(chunks: meshChunks, keyframes: frames) else {
             return nil
         }
         return .init(directory: tmp, fileName: "room_full.scn", scene: scene)
     }
 
-    /// Write scn after Review is already showing (non-blocking).
+    /// Full export with texture files + scn (background after Review appears).
     func persistExportInBackground(_ payload: FullEnvironmentScanModel.ExportPayload) {
-        guard let scene = payload.scene else { return }
+        stateLock.lock()
+        let meshChunks = Array(chunks.values)
+        let frames = keyframes
+        stateLock.unlock()
         let dir = payload.directory
         DispatchQueue.global(qos: .utility).async {
-            _ = PhotoTexturedMeshBuilder.writeScene(scene, to: dir)
+            // Rebuild with textureDir so jpg textures are saved next to scn
+            if let built = PhotoTexturedMeshBuilder.buildAndExport(
+                chunks: meshChunks,
+                keyframes: frames,
+                to: dir
+            ) {
+                _ = built
+            } else if let scene = payload.scene {
+                _ = PhotoTexturedMeshBuilder.writeScene(scene, to: dir)
+            }
         }
     }
 
@@ -803,7 +816,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[mesh.identifier], now - last < 0.28 { return }
+        if let last = lastVizTime[mesh.identifier], now - last < 0.55 { return }
         lastVizTime[mesh.identifier] = now
         applyBlueWire(node: node, mesh: mesh)
         if let chunk = Self.copyChunk(from: mesh) {
@@ -824,8 +837,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func applyBlueWire(node: SCNNode, mesh: ARMeshAnchor) {
-        guard let geom = Self.wireGeometry(mesh.geometry) else { return }
-        node.geometry = geom
+        // Lightweight: skip full wire rebuild (was main scan lag).
+        // User still sees yellow feature points + cyan coverage dots.
+        _ = mesh
+        _ = node
     }
 
     private static func wireGeometry(_ mesh: ARMeshGeometry) -> SCNGeometry? {
@@ -883,13 +898,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let t = frame.timestamp
 
         // Copy mesh from frame anchors (throttled) — safe snapshot
-        if t - lastMeshCopyTime >= 0.07 {
+        if t - lastMeshCopyTime >= 0.20 {
             lastMeshCopyTime = t
             ingestMeshes(from: frame)
         }
 
         // Color keyframes (throttled)
-        if t - lastKeyframeTime >= 0.11 {
+        if t - lastKeyframeTime >= 0.28 {
             lastKeyframeTime = t
             ingestKeyframe(from: frame)
         }
@@ -936,7 +951,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     /// Lightweight dots so user SEES capture progress (not heavy wireframe).
     private func updateCoverageMarkersIfNeeded() {
         let now = CACurrentMediaTime()
-        if now - lastMarkerUpdate < 0.6 { return }
+        if now - lastMarkerUpdate < 1.2 { return }
         lastMarkerUpdate = now
 
         stateLock.lock()
@@ -981,7 +996,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             from: frame,
             orientation: orientation,
             viewport: viewport,
-            maxWidth: 640
+            maxWidth: 400
         ) else { return }
 
         stateLock.lock()
@@ -1013,34 +1028,55 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let faces = geom.faces
         let vCount = vSource.count
         guard vCount > 0, faces.count > 0 else { return nil }
+        // Soft cap — skip only extreme anchors
+        guard vCount < 100_000 else { return nil }
 
-        // Cap per-chunk vertices to avoid memory spikes
-        guard vCount < 250_000 else { return nil }
+        // Subsample large meshes for smoother scanning / faster bake
+        let step = vCount > 25_000 ? 2 : 1
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        positions.reserveCapacity(vCount / step + 1)
+        normals.reserveCapacity(vCount / step + 1)
+        var remap = [Int: Int]()
+        remap.reserveCapacity(vCount / step + 1)
 
-        var positions = [SIMD3<Float>](repeating: .zero, count: vCount)
-        var normals = [SIMD3<Float>](repeating: .zero, count: vCount)
-        for i in 0..<vCount {
+        for i in stride(from: 0, to: vCount, by: step) {
             let vp = vSource.buffer.contents().advanced(by: vSource.offset + vSource.stride * i)
-            positions[i] = vp.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            positions.append(vp.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
             if nSource.count == vCount {
                 let np = nSource.buffer.contents().advanced(by: nSource.offset + nSource.stride * i)
-                normals[i] = np.assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                normals.append(np.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
+            } else {
+                normals.append(SIMD3(0, 1, 0))
             }
+            remap[i] = positions.count - 1
         }
 
         var indices = [UInt32]()
-        indices.reserveCapacity(faces.count * faces.indexCountPerPrimitive)
-        for f in 0..<faces.count {
+        let faceStep = faces.count > 40_000 ? 2 : 1
+        indices.reserveCapacity(faces.count / faceStep * faces.indexCountPerPrimitive)
+        for f in stride(from: 0, to: faces.count, by: faceStep) {
+            var tri = [UInt32]()
+            tri.reserveCapacity(3)
+            var ok = true
             for c in 0..<faces.indexCountPerPrimitive {
                 let off = (f * faces.indexCountPerPrimitive + c) * faces.bytesPerIndex
                 let base = faces.buffer.contents().advanced(by: off)
+                let raw: Int
                 if faces.bytesPerIndex == 2 {
-                    indices.append(UInt32(base.assumingMemoryBound(to: UInt16.self).pointee))
+                    raw = Int(base.assumingMemoryBound(to: UInt16.self).pointee)
                 } else {
-                    indices.append(base.assumingMemoryBound(to: UInt32.self).pointee)
+                    raw = Int(base.assumingMemoryBound(to: UInt32.self).pointee)
                 }
+                let snapped = (raw / step) * step
+                guard let mapped = remap[snapped] else { ok = false; break }
+                tri.append(UInt32(mapped))
+            }
+            if ok, tri.count == 3, tri[0] != tri[1], tri[1] != tri[2] {
+                indices.append(contentsOf: tri)
             }
         }
+        guard !indices.isEmpty else { return nil }
 
         return CapturedMeshChunk(
             id: anchor.identifier,
