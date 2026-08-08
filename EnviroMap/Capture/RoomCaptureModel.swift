@@ -36,7 +36,7 @@ final class RoomCaptureModel: ObservableObject {
     func refreshSupport() {
         isSupported = RoomCaptureSession.isSupported
         if !isSupported {
-            instruction = "This device has no LiDAR — RoomPlan needs iPhone 12 Pro / 13 Pro / 14 Pro / 15 Pro / 16 Pro (or Pro iPad)."
+            instruction = "This device has no LiDAR — RoomPlan needs a Pro iPhone/iPad with LiDAR."
         } else if phase == .idle {
             instruction = "Ready — walk slowly around the room"
         }
@@ -295,10 +295,8 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
         }
     }
 
-    /// Only cases that exist on all RoomPlan SDK versions we target.
+    /// Safe across SDK versions: known cases + plain `default` (always exhaustive).
     private static func humanReadable(_ instruction: RoomCaptureSession.Instruction) -> String {
-        // Official cases: normal, moveCloseToWall, moveAwayFromWall, slowDown, lowTexture
-        // (turnLeft / turnRight are NOT available on all SDKs — do not reference them)
         switch instruction {
         case .moveCloseToWall:
             return "Move closer to the wall"
@@ -310,8 +308,8 @@ extension RoomCaptureHostController: RoomCaptureSessionDelegate {
             return "Low texture — point at corners, frames, or furniture edges"
         case .normal:
             return "Looking good — keep scanning the remaining walls"
-        @unknown default:
-            // Covers any newer coaching cases (e.g. turn hints on future OS)
+        default:
+            // Covers turnLeft / turnRight / any future coaching cases without compile errors
             return "Keep scanning — cover walls, doors, and windows"
         }
     }
