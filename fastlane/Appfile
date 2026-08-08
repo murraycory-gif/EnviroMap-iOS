@@ -1,0 +1,7 @@
+# Update if your Apple ID / team differ
+app_identifier("com.enviromap.app")
+# apple_id("you@example.com")
+# team_id("XXXXXXXXXX")
+
+# For match / App Store later:
+# itc_team_id("123456")

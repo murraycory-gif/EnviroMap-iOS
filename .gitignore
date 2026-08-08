@@ -1,0 +1,11 @@
+
+# Fastlane / build
+build/
+DerivedData/
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+*.xcresult
+.bundle/
+vendor/bundle/

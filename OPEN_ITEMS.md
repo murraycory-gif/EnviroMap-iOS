@@ -21,6 +21,7 @@ Last updated: 2026-08-08
 | OI-015 | Design System | App-wide Title Case for first letter of each word in UI strings | Low | In Progress | 2026-08-08 | | Established for Level; extend to Home, Library, Onboarding |
 | OI-016 | Library | Empty state + open prior scans must be obvious for new users | Medium | Open | 2026-08-08 | | “My Rooms” tab — validate with zero scans and with 1+ scans |
 | OI-017 | AR Walk | Walk AR stability after scan | Medium | Open | | | Test with latest mesh export |
+| OI-019 | Automation / Fastlane | Wire continuous build+unit tests; LiDAR still manual on device | Medium | Done | 2026-08-08 | 2026-08-08 | `bundle exec fastlane qa` — see FASTLANE.md |
 | OI-018 | Signing / Device | Trust developer, team signing, keychain prompts on device installs | Low | Done | 2026-08-07 | 2026-08-07 | Documented for Cory’s iPhone workflow |
 
 ---

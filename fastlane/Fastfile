@@ -1,0 +1,109 @@
+# EnviroMap Fastlane
+# Run from repo root on your Mac (not Linux CI without Xcode).
+#
+#   bundle install
+#   bundle exec fastlane build
+#   bundle exec fastlane tests
+#   bundle exec fastlane qa
+#   bundle exec fastlane open_items
+
+default_platform(:ios)
+
+PROJECT = "EnviroMap.xcodeproj"
+SCHEME  = "EnviroMap"
+BUNDLE  = "com.enviromap.app"
+
+platform :ios do
+  desc "Compile EnviroMap for iOS Simulator (smoke build)"
+  lane :build do
+    build_app(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Debug",
+      destination: "generic/platform=iOS Simulator",
+      skip_package_ipa: true,
+      skip_archive: true,
+      skip_codesigning: true,
+      derived_data_path: "build/DerivedData",
+      buildlog_path: "build/logs",
+      silent: false,
+      clean: false
+    )
+    UI.success("✅ Simulator build succeeded")
+  end
+
+  desc "Clean + build for Simulator"
+  lane :build_clean do
+    build_app(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Debug",
+      destination: "generic/platform=iOS Simulator",
+      skip_package_ipa: true,
+      skip_archive: true,
+      skip_codesigning: true,
+      derived_data_path: "build/DerivedData",
+      clean: true
+    )
+    UI.success("✅ Clean simulator build succeeded")
+  end
+
+  desc "Run unit tests (EnviroMapTests) on Simulator"
+  lane :tests do
+    scan(
+      project: PROJECT,
+      scheme: SCHEME,
+      device: ENV["SCAN_DEVICE"] || "iPhone 16",
+      clean: false,
+      code_coverage: true,
+      derived_data_path: "build/DerivedData",
+      output_directory: "build/test_output",
+      output_types: "html,junit",
+      result_bundle: true,
+      fail_build: true
+    )
+    UI.success("✅ Unit tests passed")
+  end
+
+  desc "Build + unit tests (main CI lane)"
+  lane :qa do
+    build
+    tests
+    open_items
+    UI.success("✅ QA lane finished — still do device LiDAR checks for OI-007+")
+  end
+
+  desc "Print open high-priority items from OPEN_ITEMS.md"
+  lane :open_items do
+    path = File.expand_path("../OPEN_ITEMS.md", __dir__)
+    UI.user_error!("OPEN_ITEMS.md not found") unless File.exist?(path)
+    lines = File.readlines(path)
+    high = lines.select { |l| l.include?("| High |") && l.include?("| Open") }
+    UI.header("Open High-Priority Items")
+    if high.empty?
+      UI.message("None marked High + Open")
+    else
+      high.each { |l| UI.message(l.strip) }
+    end
+    UI.message("Full list: OPEN_ITEMS.md")
+  end
+
+  desc "Build for a connected physical device (requires signing team in Xcode)"
+  lane :device_build do
+    build_app(
+      project: PROJECT,
+      scheme: SCHEME,
+      configuration: "Debug",
+      destination: "generic/platform=iOS",
+      export_method: "development",
+      skip_archive: true,
+      derived_data_path: "build/DerivedData"
+    )
+    UI.success("✅ Device build finished — install via Xcode or ios-deploy")
+  end
+
+  desc "List available simulators"
+  lane :sims do
+    sh("xcrun simctl list devices available")
+  end
+end
