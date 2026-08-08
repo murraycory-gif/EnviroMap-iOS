@@ -200,7 +200,7 @@ struct RoomPlannerView: View {
                 importWallsIfNeeded(from: session)
             }
         }
-        .onChange(of: layout) { _, _ in
+        .onChange(of: layout) { _ in
             saveLayout()
         }
         .alert("Room size (feet)", isPresented: $showResize) {

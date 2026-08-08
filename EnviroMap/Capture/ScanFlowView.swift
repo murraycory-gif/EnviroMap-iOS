@@ -45,7 +45,7 @@ struct ScanFlowView: View {
                     }
                 }
             }
-            .onChange(of: model.phase) { _, newPhase in
+            .onChange(of: model.phase) { newPhase in
                 if newPhase == .completed {
                     showSaveSheet = true
                 }
