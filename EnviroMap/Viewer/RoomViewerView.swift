@@ -1,22 +1,96 @@
 import SwiftUI
-import RealityKit
-import ARKit
+import SceneKit
 import UIKit
+import QuickLook
 
+/// Offline 3D mesh viewer (SceneKit — no ARView, won’t freeze the UI).
 struct RoomViewerView: View {
     @EnvironmentObject private var store: SessionStore
     let session: RoomSession
 
+    @State private var isLoading = true
     @State private var loadError: String?
     @State private var showShare = false
+    @State private var showQuickLook = false
+
+    private var usdzURL: URL {
+        store.usdzURL(for: session)
+    }
+
+    private var fileExists: Bool {
+        FileManager.default.fileExists(atPath: usdzURL.path)
+    }
 
     var body: some View {
         ZStack {
-            MeshPreviewRepresentable(
-                usdzURL: store.usdzURL(for: session),
-                onError: { loadError = $0 }
+            // Soft studio bg
+            LinearGradient(
+                colors: [
+                    Color(red: 0.08, green: 0.10, blue: 0.16),
+                    Color(red: 0.12, green: 0.16, blue: 0.28),
+                    Color(red: 0.06, green: 0.08, blue: 0.12),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
+
+            if let loadError {
+                VStack(spacing: 16) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.orange)
+                    Text("Could not open mesh")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text(loadError)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                    if fileExists {
+                        Button("Open in Quick Look") {
+                            showQuickLook = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(AppTheme.blue)
+                    }
+                }
+            } else if !fileExists {
+                VStack(spacing: 16) {
+                    Image(systemName: "cube.transparent")
+                        .font(.system(size: 44))
+                        .foregroundStyle(AppTheme.blue)
+                    Text("No USDZ file")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("This scan has no mesh on disk. Scan again and save.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                }
+            } else {
+                MeshSceneView(
+                    usdzURL: usdzURL,
+                    isLoading: $isLoading,
+                    loadError: $loadError
+                )
+                .ignoresSafeArea(edges: .bottom)
+
+                if isLoading {
+                    VStack(spacing: 14) {
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(1.2)
+                        Text("Loading 3D mesh…")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                    .padding(24)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
+            }
 
             VStack {
                 Spacer()
@@ -27,25 +101,29 @@ struct RoomViewerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showShare = true
-                } label: {
-                    Image(systemName: "square.and.arrow.up")
+                HStack(spacing: 12) {
+                    if fileExists {
+                        Button {
+                            showQuickLook = true
+                        } label: {
+                            Image(systemName: "eye")
+                        }
+                    }
+                    Button {
+                        showShare = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .disabled(!fileExists)
                 }
             }
         }
         .sheet(isPresented: $showShare) {
             ShareSheet(items: store.shareItems(for: session))
         }
-        .overlay {
-            if let loadError {
-                ContentUnavailableView(
-                    "Could not open mesh",
-                    systemImage: "exclamationmark.triangle",
-                    description: Text(loadError)
-                )
-                .background(.ultraThinMaterial)
-            }
+        .sheet(isPresented: $showQuickLook) {
+            QuickLookUSDZ(url: usdzURL)
+                .ignoresSafeArea()
         }
     }
 
@@ -54,14 +132,15 @@ struct RoomViewerView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.name)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
                 Text("\(session.wallCount) walls · \(session.objectCount) objects · \(session.doorCount) doors")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.white.opacity(0.7))
             }
             Spacer()
-            Text("Drag to orbit")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Text("Drag · Pinch")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.7))
         }
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -69,132 +148,159 @@ struct RoomViewerView: View {
     }
 }
 
-struct MeshPreviewRepresentable: UIViewRepresentable {
+// MARK: - SceneKit preview (lightweight, no AR session)
+
+struct MeshSceneView: UIViewRepresentable {
     let usdzURL: URL
-    var onError: (String) -> Void
+    @Binding var isLoading: Bool
+    @Binding var loadError: String?
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
-    func makeUIView(context: Context) -> ARView {
-        let view = ARView(frame: .zero)
-        view.cameraMode = .nonAR
-        view.environment.background = .color(
-            UIColor(red: 0.04, green: 0.04, blue: 0.05, alpha: 1)
-        )
-        view.renderOptions.insert(.disableMotionBlur)
-        context.coordinator.arView = view
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView(frame: .zero)
+        view.backgroundColor = .clear
+        view.autoenablesDefaultLighting = true
+        view.allowsCameraControl = true
+        view.antialiasingMode = .multisampling4X
+        view.preferredFramesPerSecond = 60
+        // Empty scene first so navigation isn’t blocked
+        view.scene = SCNScene()
+        context.coordinator.view = view
 
-        let camera = PerspectiveCamera()
-        camera.camera.fieldOfViewInDegrees = 55
-        let camAnchor = AnchorEntity(world: .zero)
-        camAnchor.addChild(camera)
-        view.scene.addAnchor(camAnchor)
-        context.coordinator.camera = camera
-        context.coordinator.updateCamera()
-
-        let light = DirectionalLight()
-        light.light.color = .white
-        light.light.intensity = 1400
-        light.shadow = DirectionalLightComponent.Shadow()
-        light.look(at: .zero, from: [4, 8, 3], relativeTo: nil)
-        let lightAnchor = AnchorEntity(world: .zero)
-        lightAnchor.addChild(light)
-        view.scene.addAnchor(lightAnchor)
-
-        let ambient = AnchorEntity(world: .zero)
-        let ambientLight = PointLight()
-        ambientLight.light.color = .white
-        ambientLight.light.intensity = 400
-        ambientLight.light.attenuationRadius = 20
-        ambientLight.position = [0, 2, 0]
-        ambient.addChild(ambientLight)
-        view.scene.addAnchor(ambient)
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let entity = try Entity.load(contentsOf: usdzURL)
-                entity.generateCollisionShapes(recursive: true)
-
-                let bounds = entity.visualBounds(relativeTo: nil)
-                let extent = bounds.extents
-                let maxDim = max(extent.x, max(extent.y, extent.z))
-                if maxDim > 0.001 {
-                    let scale = 3.0 / maxDim
-                    entity.scale = SIMD3<Float>(repeating: scale)
-                }
-                entity.position = SIMD3<Float>(
-                    -bounds.center.x * entity.scale.x,
-                    -bounds.min.y * entity.scale.y,
-                    -bounds.center.z * entity.scale.z
-                )
-
-                DispatchQueue.main.async {
-                    let anchor = AnchorEntity(world: .zero)
-                    anchor.addChild(entity)
-                    view.scene.addAnchor(anchor)
-                    context.coordinator.root = entity
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    onError(error.localizedDescription)
-                }
-            }
-        }
-
-        let pan = UIPanGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handlePan(_:))
-        )
-        view.addGestureRecognizer(pan)
-
-        let pinch = UIPinchGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handlePinch(_:))
-        )
-        view.addGestureRecognizer(pinch)
-
+        // Load mesh off the main path after first frame
+        context.coordinator.load(url: usdzURL, isLoading: $isLoading, loadError: $loadError)
         return view
     }
 
-    func updateUIView(_ uiView: ARView, context: Context) {}
+    func updateUIView(_ uiView: SCNView, context: Context) {}
 
-    final class Coordinator: NSObject {
-        weak var arView: ARView?
-        var camera: PerspectiveCamera?
-        var root: Entity?
-        private var yaw: Float = 0.75
-        private var pitch: Float = -0.4
-        private var radius: Float = 5.2
+    final class Coordinator {
+        weak var view: SCNView?
+        private var didLoad = false
 
-        @objc func handlePan(_ g: UIPanGestureRecognizer) {
-            let t = g.translation(in: g.view)
-            yaw += Float(t.x) * 0.005
-            pitch -= Float(t.y) * 0.004
-            pitch = min(0.15, max(-1.25, pitch))
-            g.setTranslation(.zero, in: g.view)
-            updateCamera()
-        }
+        func load(url: URL, isLoading: Binding<Bool>, loadError: Binding<String?>) {
+            guard !didLoad else { return }
+            didLoad = true
 
-        @objc func handlePinch(_ g: UIPinchGestureRecognizer) {
-            radius /= Float(g.scale)
-            radius = min(14, max(1.8, radius))
-            g.scale = 1
-            updateCamera()
-        }
+            DispatchQueue.main.async {
+                isLoading.wrappedValue = true
+            }
 
-        func updateCamera() {
-            guard let camera else { return }
-            let x = radius * cos(pitch) * sin(yaw)
-            let y = radius * sin(-pitch) + 1.0
-            let z = radius * cos(pitch) * cos(yaw)
-            let pos = SIMD3<Float>(x, y, z)
-            camera.position = pos
-            camera.look(at: SIMD3<Float>(0, 0.6, 0), from: pos, relativeTo: nil)
+            // Background load — large RoomPlan USDZ must not block UI
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Sanity checks
+                guard FileManager.default.fileExists(atPath: url.path) else {
+                    DispatchQueue.main.async {
+                        isLoading.wrappedValue = false
+                        loadError.wrappedValue = "File missing:\n\(url.lastPathComponent)"
+                    }
+                    return
+                }
+
+                let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+                let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+                if size < 64 {
+                    DispatchQueue.main.async {
+                        isLoading.wrappedValue = false
+                        loadError.wrappedValue = "Mesh file is empty. Scan again and save."
+                    }
+                    return
+                }
+
+                do {
+                    // SceneKit loads USDZ reliably for preview (no RealityKit freeze)
+                    let scene = try SCNScene(url: url, options: [
+                        .checkConsistency: true,
+                        .createNormalsIfAbsent: true,
+                    ])
+
+                    // Soft ground plane for scale
+                    let floor = SCNFloor()
+                    floor.reflectivity = 0.05
+                    floor.firstMaterial?.diffuse.contents = UIColor(white: 0.15, alpha: 1)
+                    floor.firstMaterial?.lightingModel = .physicallyBased
+                    let floorNode = SCNNode(geometry: floor)
+                    floorNode.position.y = -0.01
+                    scene.rootNode.addChildNode(floorNode)
+
+                    // Camera if missing
+                    if scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).isEmpty {
+                        let cam = SCNNode()
+                        cam.camera = SCNCamera()
+                        cam.camera?.fieldOfView = 50
+                        cam.camera?.wantsHDR = true
+                        cam.position = SCNVector3(4, 3, 6)
+                        cam.look(at: SCNVector3(0, 1, 0))
+                        scene.rootNode.addChildNode(cam)
+                    }
+
+                    // Gentle fill light
+                    let light = SCNNode()
+                    light.light = SCNLight()
+                    light.light?.type = .directional
+                    light.light?.intensity = 800
+                    light.eulerAngles = SCNVector3(-0.8, 0.5, 0)
+                    scene.rootNode.addChildNode(light)
+
+                    let ambient = SCNNode()
+                    ambient.light = SCNLight()
+                    ambient.light?.type = .ambient
+                    ambient.light?.intensity = 350
+                    scene.rootNode.addChildNode(ambient)
+
+                    DispatchQueue.main.async { [weak self] in
+                        guard let scnView = self?.view else { return }
+                        scnView.scene = scene
+                        scnView.pointOfView = scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).first
+                        // Default camera control target
+                        scnView.defaultCameraController.automaticTarget = true
+                        scnView.defaultCameraController.inertiaEnabled = true
+                        isLoading.wrappedValue = false
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        isLoading.wrappedValue = false
+                        loadError.wrappedValue = error.localizedDescription
+                    }
+                }
+            }
         }
     }
 }
+
+// MARK: - System Quick Look fallback
+
+struct QuickLookUSDZ: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> QLPreviewController {
+        let vc = QLPreviewController()
+        vc.dataSource = context.coordinator
+        return vc
+    }
+
+    func updateUIViewController(_ uiViewController: QLPreviewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(url: url)
+    }
+
+    final class Coordinator: NSObject, QLPreviewControllerDataSource {
+        let url: URL
+        init(url: URL) { self.url = url }
+
+        func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
+
+        func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+            url as NSURL
+        }
+    }
+}
+
+// MARK: - Share
 
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
