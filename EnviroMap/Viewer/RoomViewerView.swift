@@ -259,7 +259,7 @@ struct MeshSceneView: UIViewRepresentable {
                         cam.camera?.fieldOfView = 55
                         cam.camera?.wantsHDR = true
                         cam.position = SCNVector3(3.5, 2.4, 5.5)
-                        cam.look(at: SCNVector3(0, 1.1, 0))
+                        cam.eulerAngles = SCNVector3(Float(-0.35), Float(0.55), Float(0))
                         scene.rootNode.addChildNode(cam)
                     }
 

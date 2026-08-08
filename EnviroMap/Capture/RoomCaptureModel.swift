@@ -366,12 +366,14 @@ final class RoomCaptureHostController: UIViewController {
 
     private func startHarvestTimer() {
         stopHarvestTimer()
-        harvestTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
             if let ar = self.roomCaptureView?.captureSession.arSession {
                 self.denseMesh.harvest(from: ar)
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        harvestTimer = timer
     }
 
     private func stopHarvestTimer() {

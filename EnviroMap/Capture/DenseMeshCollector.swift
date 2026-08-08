@@ -2,27 +2,24 @@ import Foundation
 import ARKit
 import SceneKit
 import UIKit
-import Metal
 import simd
 
 /// Collects LiDAR scene-reconstruction mesh while RoomPlan runs,
 /// then builds a colored dense mesh of the real space (not only wall boxes).
-final class DenseMeshCollector: NSObject {
+final class DenseMeshCollector: NSObject, ARSessionDelegate {
     private let lock = NSLock()
     private var meshes: [UUID: ARMeshAnchor] = [:]
-    private weak var session: ARSession?
+    private weak var observedSession: ARSession?
     private var isRunning = false
 
     func attach(to arSession: ARSession) {
         lock.lock()
-        // Don’t steal delegate if RoomPlan owns critical callbacks —
-        // we use a forwarding approach: set ourselves only if nil, else poll anchors.
-        session = arSession
+        observedSession = arSession
         meshes.removeAll()
         isRunning = true
         lock.unlock()
-
-        // Prefer observing via delegate when free; also poll as backup
+        // Only take the delegate if RoomPlan left it empty (usually it didn't —
+        // harvest() is the reliable path).
         if arSession.delegate == nil {
             arSession.delegate = self
         }
@@ -37,19 +34,23 @@ final class DenseMeshCollector: NSObject {
     func detach() {
         lock.lock()
         isRunning = false
-        if session?.delegate === self {
-            session?.delegate = nil
+        if let s = observedSession, s.delegate === self {
+            s.delegate = nil
         }
-        session = nil
+        observedSession = nil
         meshes.removeAll()
         lock.unlock()
     }
 
-    /// Pull latest mesh anchors from the live AR frame (works even if we don’t own the delegate).
+    /// Pull latest mesh anchors from the live AR frame.
     func harvest(from arSession: ARSession?) {
-        guard let arSession, let frame = arSession.currentFrame else { return }
+        guard let arSession = arSession else { return }
+        guard let frame = arSession.currentFrame else { return }
         lock.lock()
-        guard isRunning else { lock.unlock(); return }
+        guard isRunning else {
+            lock.unlock()
+            return
+        }
         for anchor in frame.anchors {
             if let mesh = anchor as? ARMeshAnchor {
                 meshes[mesh.identifier] = mesh
@@ -59,7 +60,8 @@ final class DenseMeshCollector: NSObject {
     }
 
     var meshCount: Int {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return meshes.count
     }
 
@@ -81,7 +83,6 @@ final class DenseMeshCollector: NSObject {
         }
         guard anyGeometry else { return nil }
 
-        // Lighting that makes surface color readable
         let ambient = SCNNode()
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
@@ -93,15 +94,14 @@ final class DenseMeshCollector: NSObject {
         key.light = SCNLight()
         key.light?.type = .directional
         key.light?.intensity = 950
-        key.light?.castsShadow = false
-        key.eulerAngles = SCNVector3(-0.85, 0.55, 0)
+        key.eulerAngles = SCNVector3(Float(-0.85), Float(0.55), Float(0))
         scene.rootNode.addChildNode(key)
 
         let fill = SCNNode()
         fill.light = SCNLight()
         fill.light?.type = .directional
         fill.light?.intensity = 420
-        fill.eulerAngles = SCNVector3(-0.25, -0.9, 0)
+        fill.eulerAngles = SCNVector3(Float(-0.25), Float(-0.9), Float(0))
         scene.rootNode.addChildNode(fill)
 
         let cam = SCNNode()
@@ -110,8 +110,9 @@ final class DenseMeshCollector: NSObject {
         cam.camera?.wantsHDR = true
         cam.camera?.zNear = 0.05
         cam.camera?.zFar = 50
-        cam.position = SCNVector3(3.2, 2.0, 4.2)
-        cam.look(at: SCNVector3(0, 1.0, 0))
+        cam.position = SCNVector3(Float(3.2), Float(2.0), Float(4.2))
+        // Aim roughly at room center without look(at:) API variance
+        cam.eulerAngles = SCNVector3(Float(-0.35), Float(0.6), Float(0))
         scene.rootNode.addChildNode(cam)
 
         return scene
@@ -133,13 +134,36 @@ final class DenseMeshCollector: NSObject {
         return nil
     }
 
+    // MARK: - ARSessionDelegate
+
+    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { ingest(anchors) }
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) { ingest(anchors) }
+    func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
+        lock.lock()
+        for a in anchors { meshes.removeValue(forKey: a.identifier) }
+        lock.unlock()
+    }
+
+    private func ingest(_ anchors: [ARAnchor]) {
+        lock.lock()
+        guard isRunning else {
+            lock.unlock()
+            return
+        }
+        for a in anchors {
+            if let m = a as? ARMeshAnchor {
+                meshes[m.identifier] = m
+            }
+        }
+        lock.unlock()
+    }
+
     // MARK: - Convert ARMeshAnchor → SCNNode
 
     private static func makeNode(from anchor: ARMeshAnchor) -> SCNNode? {
         guard let geometry = makeGeometry(from: anchor.geometry) else { return nil }
         let node = SCNNode(geometry: geometry)
         node.simdTransform = anchor.transform
-        node.name = "dense-\(anchor.identifier.uuidString.prefix(8))"
         return node
     }
 
@@ -151,15 +175,15 @@ final class DenseMeshCollector: NSObject {
         let vCount = vertexSource.count
         guard vCount > 0, faces.count > 0 else { return nil }
 
-        // --- Vertices ---
         var positions = [Float](repeating: 0, count: vCount * 3)
         for i in 0..<vCount {
-            let v = vertex(at: i, from: vertexSource)
+            let v = readFloat3(source: vertexSource, index: i)
             positions[i * 3 + 0] = v.x
             positions[i * 3 + 1] = v.y
             positions[i * 3 + 2] = v.z
         }
-        let posData = Data(bytes: &positions, count: positions.count * MemoryLayout<Float>.size)
+
+        let posData = floatArrayData(positions)
         let scnVertices = SCNGeometrySource(
             data: posData,
             semantic: .vertex,
@@ -171,17 +195,17 @@ final class DenseMeshCollector: NSObject {
             dataStride: MemoryLayout<Float>.size * 3
         )
 
-        // --- Normals ---
         var sources: [SCNGeometrySource] = [scnVertices]
+
         if normalSource.count == vCount {
             var normals = [Float](repeating: 0, count: vCount * 3)
             for i in 0..<vCount {
-                let n = vertex(at: i, from: normalSource)
+                let n = readFloat3(source: normalSource, index: i)
                 normals[i * 3 + 0] = n.x
                 normals[i * 3 + 1] = n.y
                 normals[i * 3 + 2] = n.z
             }
-            let nData = Data(bytes: &normals, count: normals.count * MemoryLayout<Float>.size)
+            let nData = floatArrayData(normals)
             sources.append(
                 SCNGeometrySource(
                     data: nData,
@@ -196,24 +220,25 @@ final class DenseMeshCollector: NSObject {
             )
         }
 
-        // --- Vertex colors (classification or height heuristic) ---
+        // Classification may be optional depending on SDK / device
+        let classificationSource: ARGeometrySource? = mesh.classification
+        let classCount = classificationSource?.count ?? 0
+
         var colors = [Float](repeating: 0, count: vCount * 4)
-        // Prefer ARMesh classification colors when the buffer has data
-        let classCount = mesh.classification.count
         for i in 0..<vCount {
             let c: SIMD4<Float>
-            if classCount > 0 {
+            if classCount > 0, let classSource = classificationSource {
                 let faceIndex = min(i / max(faces.indexCountPerPrimitive, 1), max(faces.count - 1, 0))
-                let cls = classification(at: faceIndex, from: mesh.classification)
+                let cls = readClassification(source: classSource, faceIndex: faceIndex)
                 c = color(for: cls)
             } else {
                 let y = positions[i * 3 + 1]
                 if y < 0.12 {
-                    c = SIMD4(0.52, 0.42, 0.32, 1) // floor
+                    c = SIMD4(0.52, 0.42, 0.32, 1)
                 } else if y > 2.3 {
-                    c = SIMD4(0.94, 0.95, 0.97, 1) // ceiling
+                    c = SIMD4(0.94, 0.95, 0.97, 1)
                 } else {
-                    c = SIMD4(0.84, 0.86, 0.88, 1) // walls / clutter
+                    c = SIMD4(0.84, 0.86, 0.88, 1)
                 }
             }
             colors[i * 4 + 0] = c.x
@@ -221,7 +246,7 @@ final class DenseMeshCollector: NSObject {
             colors[i * 4 + 2] = c.z
             colors[i * 4 + 3] = c.w
         }
-        let cData = Data(bytes: &colors, count: colors.count * MemoryLayout<Float>.size)
+        let cData = floatArrayData(colors)
         sources.append(
             SCNGeometrySource(
                 data: cData,
@@ -235,18 +260,16 @@ final class DenseMeshCollector: NSObject {
             )
         )
 
-        // --- Indices ---
         let primCount = faces.count
         let idxPerPrim = faces.indexCountPerPrimitive
         var indices = [UInt32]()
         indices.reserveCapacity(primCount * idxPerPrim)
         for f in 0..<primCount {
-            for c in 0..<idxPerPrim {
-                indices.append(faceIndex(face: f, corner: c, element: faces))
+            for corner in 0..<idxPerPrim {
+                indices.append(readFaceIndex(element: faces, face: f, corner: corner))
             }
         }
-        var idxCopy = indices
-        let iData = Data(bytes: &idxCopy, count: idxCopy.count * MemoryLayout<UInt32>.size)
+        let iData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
         let element = SCNGeometryElement(
             data: iData,
             primitiveType: .triangles,
@@ -261,29 +284,31 @@ final class DenseMeshCollector: NSObject {
         mat.roughness.contents = NSNumber(value: 0.88)
         mat.metalness.contents = NSNumber(value: 0.0)
         mat.diffuse.contents = UIColor.white
-        // Ensure vertex colors are used
         mat.writesToDepthBuffer = true
         geom.materials = [mat]
         return geom
     }
 
-    private static func vertex(at index: Int, from source: ARGeometrySource) -> SIMD3<Float> {
+    private static func floatArrayData(_ values: [Float]) -> Data {
+        values.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+
+    private static func readFloat3(source: ARGeometrySource, index: Int) -> SIMD3<Float> {
         let ptr = source.buffer.contents().advanced(by: source.offset + source.stride * index)
         return ptr.assumingMemoryBound(to: SIMD3<Float>.self).pointee
     }
 
-    private static func faceIndex(face: Int, corner: Int, element: ARGeometryElement) -> UInt32 {
-        let base = element.buffer.contents().advanced(
-            by: (face * element.indexCountPerPrimitive + corner) * element.bytesPerIndex
-        )
+    private static func readFaceIndex(element: ARGeometryElement, face: Int, corner: Int) -> UInt32 {
+        let byteOffset = (face * element.indexCountPerPrimitive + corner) * element.bytesPerIndex
+        let base = element.buffer.contents().advanced(by: byteOffset)
         if element.bytesPerIndex == 2 {
             return UInt32(base.assumingMemoryBound(to: UInt16.self).pointee)
         }
         return base.assumingMemoryBound(to: UInt32.self).pointee
     }
 
-    private static func classification(at faceIndex: Int, from source: ARGeometrySource) -> ARMeshClassification {
-        let idx = min(faceIndex, max(source.count - 1, 0))
+    private static func readClassification(source: ARGeometrySource, faceIndex: Int) -> ARMeshClassification {
+        let idx = min(max(faceIndex, 0), max(source.count - 1, 0))
         let ptr = source.buffer.contents().advanced(by: source.offset + source.stride * idx)
         let raw = Int(ptr.assumingMemoryBound(to: UInt8.self).pointee)
         return ARMeshClassification(rawValue: raw) ?? .none
@@ -302,26 +327,5 @@ final class DenseMeshCollector: NSObject {
         @unknown default:
             return SIMD4(0.72, 0.74, 0.76, 1)
         }
-    }
-}
-
-// MARK: - ARSessionDelegate (when we own the delegate)
-
-extension DenseMeshCollector: ARSessionDelegate {
-    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) { ingest(anchors) }
-    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) { ingest(anchors) }
-    func session(_ session: ARSession, didRemove anchors: [ARAnchor]) {
-        lock.lock()
-        for a in anchors { meshes.removeValue(forKey: a.identifier) }
-        lock.unlock()
-    }
-
-    private func ingest(_ anchors: [ARAnchor]) {
-        lock.lock()
-        guard isRunning else { lock.unlock(); return }
-        for a in anchors {
-            if let m = a as? ARMeshAnchor { meshes[m.identifier] = m }
-        }
-        lock.unlock()
     }
 }
