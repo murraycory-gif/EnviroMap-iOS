@@ -3,6 +3,7 @@ import UIKit
 
 // MARK: - Root
 // Flow: Splash (logo + name) → Onboarding (first launch) → MainHub
+// Never flash white — dark base always under content.
 
 struct RootView: View {
     @EnvironmentObject private var store: SessionStore
@@ -10,15 +11,20 @@ struct RootView: View {
     @AppStorage("enviromap.onboarding.completed.v2") private var onboardingCompleted = false
     @State private var showSplash = true
 
+    private let launchDark = Color(red: 0.06, green: 0.10, blue: 0.22)
+
     var body: some View {
         ZStack {
+            // Permanent dark base (prevents white frame)
+            launchDark.ignoresSafeArea()
+
             if showSplash {
                 LaunchSplashView()
-                    .transition(.opacity)
                     .zIndex(2)
             } else if onboardingCompleted {
                 MainHubView()
                     .transition(.opacity)
+                    .preferredColorScheme(.light)
             } else {
                 OnboardingView {
                     withAnimation(.easeInOut(duration: 0.35)) {
@@ -30,8 +36,8 @@ struct RootView: View {
         }
         .preferredColorScheme(showSplash || !onboardingCompleted ? .dark : .light)
         .tint(AppTheme.blue)
+        .background(launchDark.ignoresSafeArea())
         .onAppear {
-            // Hold splash ~1.8s so logo reads clearly, then fade into app
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
                 withAnimation(.easeInOut(duration: 0.45)) {
                     showSplash = false
@@ -50,7 +56,7 @@ struct LaunchSplashView: View {
 
     var body: some View {
         ZStack {
-            // Soft blue wash (not a flat solid blue slab)
+            // Same dark as system launch screen — seamless handoff
             LinearGradient(
                 colors: [
                     Color(red: 0.06, green: 0.10, blue: 0.22),
@@ -75,7 +81,6 @@ struct LaunchSplashView: View {
                 .offset(x: 80, y: 180)
 
             VStack(spacing: 22) {
-                // Big logo mark
                 Group {
                     if let ui = UIImage(named: markName)?.withRenderingMode(.alwaysOriginal) {
                         Image(uiImage: ui)
@@ -88,7 +93,6 @@ struct LaunchSplashView: View {
                             .interpolation(.high)
                             .scaledToFit()
                     } else {
-                        // Fallback if asset missing
                         ZStack {
                             RoundedRectangle(cornerRadius: 36, style: .continuous)
                                 .fill(
@@ -106,10 +110,9 @@ struct LaunchSplashView: View {
                 }
                 .frame(width: 168, height: 168)
                 .shadow(color: AppTheme.blue.opacity(0.45), radius: 28, y: 12)
-                .scaleEffect(appear ? 1 : 0.86)
-                .opacity(appear ? 1 : 0)
+                .scaleEffect(appear ? 1 : 0.92)
+                .opacity(appear ? 1 : 0.85)
 
-                // Name underneath
                 VStack(spacing: 6) {
                     HStack(spacing: 0) {
                         Text("Enviro")
@@ -133,12 +136,11 @@ struct LaunchSplashView: View {
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(.white.opacity(0.55))
                 }
-                .opacity(appear ? 1 : 0)
-                .offset(y: appear ? 0 : 12)
+                .opacity(appear ? 1 : 0.9)
             }
         }
         .onAppear {
-            withAnimation(.spring(response: 0.65, dampingFraction: 0.78)) {
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.82)) {
                 appear = true
             }
         }
