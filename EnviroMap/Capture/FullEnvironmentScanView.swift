@@ -523,7 +523,6 @@ struct PreviewMeshView: UIViewRepresentable {
             view.pointOfView = cam
 
             view.defaultCameraController.target = center
-            view.defaultCameraController.maximumLinearAcceleration = 30
             view.defaultCameraController.inertiaEnabled = true
         }
     }
