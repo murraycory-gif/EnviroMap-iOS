@@ -65,7 +65,7 @@ struct ToolsHomeView: View {
                 VStack(spacing: 0) {
                     HStack {
                         Spacer(minLength: 0)
-                        BrandHeader(height: 40)
+                        BrandHeader(height: 52)
                         Spacer(minLength: 0)
                     }
                     .padding(.top, 4)
@@ -74,36 +74,36 @@ struct ToolsHomeView: View {
                     ScrollView(showsIndicators: false) {
                         VStack(alignment: .leading, spacing: 12) {
                             Text("Map your space")
-                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
                                 .foregroundStyle(AppTheme.text)
 
                             // Primary
                             Button {
                                 showScanner = true
                             } label: {
-                                HStack(spacing: 12) {
+                                HStack(spacing: 14) {
                                     ZStack {
                                         Circle()
                                             .fill(.white.opacity(0.22))
-                                            .frame(width: 48, height: 48)
+                                            .frame(width: 56, height: 56)
                                         Image(systemName: "camera.viewfinder")
-                                            .font(.title3.weight(.bold))
+                                            .font(.title2.weight(.bold))
                                             .foregroundStyle(.white)
                                     }
-                                    VStack(alignment: .leading, spacing: 2) {
+                                    VStack(alignment: .leading, spacing: 4) {
                                         Text("Scan a room")
-                                            .font(.headline.weight(.bold))
+                                            .font(.title3.weight(.bold))
                                         Text("Point camera · walk slowly")
-                                            .font(.caption)
+                                            .font(.subheadline)
                                             .opacity(0.92)
                                     }
                                     Spacer()
                                     Image(systemName: "arrow.right.circle.fill")
-                                        .font(.title2)
+                                            .font(.title)
                                 }
                                 .foregroundStyle(.white)
-                                .padding(14)
-                                .frame(maxWidth: .infinity, minHeight: 72)
+                                .padding(18)
+                                .frame(maxWidth: .infinity, minHeight: 88)
                                 .background(
                                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                                         .fill(
@@ -125,16 +125,16 @@ struct ToolsHomeView: View {
                             } label: {
                                 HStack(spacing: 12) {
                                     Image(systemName: "building.2.fill")
-                                        .font(.body.weight(.semibold))
+                                        .font(.title3.weight(.semibold))
                                         .foregroundStyle(AppTheme.blue)
-                                        .frame(width: 44, height: 44)
+                                        .frame(width: 48, height: 48)
                                         .background(AppTheme.blueSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    VStack(alignment: .leading, spacing: 2) {
+                                    VStack(alignment: .leading, spacing: 3) {
                                         Text("My rooms")
-                                            .font(.headline)
+                                            .font(.headline.weight(.bold))
                                             .foregroundStyle(AppTheme.text)
                                         Text(roomCount == 0 ? "No scans yet" : "\(roomCount) saved")
-                                            .font(.caption)
+                                            .font(.subheadline)
                                             .foregroundStyle(AppTheme.textSecondary)
                                     }
                                     Spacer()
@@ -142,17 +142,17 @@ struct ToolsHomeView: View {
                                         .font(.caption.weight(.bold))
                                         .foregroundStyle(AppTheme.textTertiary)
                                 }
-                                .padding(12)
-                                .frame(minHeight: 56)
+                                .padding(14)
+                                .frame(minHeight: 64)
                                 .background(cardBg)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
 
                             Text("Tools")
-                                .font(.caption.weight(.bold))
+                                .font(.subheadline.weight(.bold))
                                 .foregroundStyle(AppTheme.textSecondary)
-                                .padding(.top, 4)
+                                .padding(.top, 6)
 
                             // 2-across grid
                             LazyVGrid(
@@ -209,27 +209,29 @@ struct ToolsHomeView: View {
                 }
             }
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: 10) {
                 Image(systemName: item.icon)
-                    .font(.title3.weight(.semibold))
+                    .font(.title2.weight(.semibold))
                     .foregroundStyle(enabled ? AppTheme.blue : AppTheme.textTertiary)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 52, height: 52)
                     .background(
                         (enabled ? AppTheme.blueSoft : Color.gray.opacity(0.08)),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                     )
                 Text(item.title)
-                    .font(.subheadline.weight(.bold))
+                    .font(.body.weight(.bold))
                     .foregroundStyle(enabled ? AppTheme.text : AppTheme.textTertiary)
                 Text(item.subtitle)
-                    .font(.caption2)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(AppTheme.textSecondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.9)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .padding(.horizontal, 8)
-            .frame(minHeight: 108)
+            .padding(.vertical, 16)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 128)
             .background(cardBg)
             .contentShape(Rectangle())
             .opacity(enabled ? 1 : 0.72)
