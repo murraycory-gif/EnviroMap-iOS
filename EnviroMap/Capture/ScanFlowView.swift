@@ -69,7 +69,7 @@ struct ScanFlowView: View {
                     model.cancel()
                 }
             }
-            .onChange(of: model.phase) { newPhase in
+            .onChange(of: model.phase) { _, newPhase in
                 if newPhase == .completed {
                     if name.isEmpty { name = defaultScanName() }
                     showSaveSheet = true

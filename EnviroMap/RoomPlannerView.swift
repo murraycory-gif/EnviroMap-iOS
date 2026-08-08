@@ -271,7 +271,7 @@ struct RoomPlannerView: View {
             loadLayout()
             if let session { importWallsIfNeeded(from: session) }
         }
-        .onChange(of: layout) { _ in saveLayout() }
+        .onChange(of: layout) { _, _ in saveLayout() }
         .alert("Room size (feet)", isPresented: $showResize) {
             TextField("Width", text: $widthText).keyboardType(.decimalPad)
             TextField("Depth", text: $depthText).keyboardType(.decimalPad)

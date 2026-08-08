@@ -55,7 +55,7 @@ struct RoomPlanHubView: View {
             ScanFlowView()
                 .environmentObject(store)
         }
-        .onChange(of: showScanner) { open in
+        .onChange(of: showScanner) { _, open in
             if !open { store.loadIndex() }
         }
     }
