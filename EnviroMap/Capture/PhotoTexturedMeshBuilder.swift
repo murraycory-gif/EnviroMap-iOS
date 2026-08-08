@@ -316,7 +316,6 @@ enum PhotoTexturedMeshBuilder {
         mat.locksAmbientWithDiffuse = true
         mat.writesToDepthBuffer = true
         mat.readsFromDepthBuffer = true
-        mat.fillsMode = .fill
         return mat
     }
 
