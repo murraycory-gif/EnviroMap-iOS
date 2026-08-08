@@ -91,9 +91,9 @@ struct ToolsHomeView: View {
                                             .foregroundStyle(.white)
                                     }
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text("Scan a room")
+                                        Text("Full 3D Scan")
                                             .font(.title3.weight(.bold))
-                                        Text("Point camera · walk slowly")
+                                        Text("Capture everything · real colors")
                                             .font(.subheadline)
                                             .opacity(0.92)
                                     }
@@ -187,7 +187,7 @@ struct ToolsHomeView: View {
                 get: { chipAlert != nil },
                 set: { if !$0 { chipAlert = nil } }
             )) {
-                Button("Scan now") { showScanner = true }
+                Button("Start Full Scan") { showScanner = true }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(chipAlert ?? "")
@@ -321,7 +321,7 @@ struct ToolsHomeView: View {
                 .foregroundStyle(AppTheme.textSecondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
-            Button("Scan a room") { showScanner = true }
+            Button("Full 3D Scan") { showScanner = true }
                 .buttonStyle(PrimaryButtonStyle())
                 .padding(.horizontal, 40)
         }

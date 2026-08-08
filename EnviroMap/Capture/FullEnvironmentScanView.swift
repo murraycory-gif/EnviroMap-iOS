@@ -171,7 +171,7 @@ struct FullEnvironmentScanView: View {
                         .disabled(didSave || model.exportPayload == nil)
                 }
             }
-            .navigationTitle("Save Scan")
+            .navigationTitle("Save Full 3D Scan")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -235,8 +235,8 @@ final class FullEnvironmentScanModel: ObservableObject {
 
     @Published var phase: Phase = .idle
     @Published var instruction = "Move slowly. Point at everything you want in 3D."
-    @Published var statusTitle = "Full Scan"
-    @Published var detailLine = "LiDAR + real colors"
+    @Published var statusTitle = "Full 3D Scan"
+    @Published var detailLine = "Everything · photo colors"
     @Published var meshChunks = 0
     @Published var coverageLabel = "—"
     @Published var hasColorFrames = false
@@ -252,7 +252,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Walk the room. Cover walls, floor, objects, and corners."
+        instruction = "Point at EVERYTHING — walls, floor, furniture, objects. Blue mesh = captured."
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
