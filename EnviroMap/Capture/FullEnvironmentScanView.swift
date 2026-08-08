@@ -744,7 +744,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
     }
 
-    func buildExport() -> FullEnvironmentScanModel.ExportPayload? {
+    func buildExportFast() -> FullEnvironmentScanModel.ExportPayload? {
         stateLock.lock()
         let meshChunks = Array(chunks.values)
         let frames = keyframes
@@ -756,7 +756,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             .appendingPathComponent("EnviroMapFull_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        // Scene first (Review), disk write optional/async
+        // Scene only — Review shows immediately; disk write is async
         guard let scene = PhotoTexturedMeshBuilder.makeScene(chunks: meshChunks, keyframes: frames) else {
             return nil
         }
@@ -770,10 +770,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         DispatchQueue.global(qos: .utility).async {
             _ = PhotoTexturedMeshBuilder.writeScene(scene, to: dir)
         }
-    }
-
-    func buildExport() -> FullEnvironmentScanModel.ExportPayload? {
-        buildExportFast()
     }
 
 
