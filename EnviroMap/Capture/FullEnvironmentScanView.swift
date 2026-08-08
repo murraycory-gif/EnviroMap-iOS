@@ -376,28 +376,21 @@ struct PreviewMeshView: UIViewRepresentable {
                 scene.rootNode.enumerateChildNodes { node, _ in
                     guard let geos = node.geometry else { return }
                     for mat in geos.materials {
-                        // No custom shaders — vertex colors via standard lighting
-                        mat.lightingModel = .lambert
+                        // Keep baked diffuse color; unlit so it doesn't wash to white
+                        mat.lightingModel = .constant
                         mat.isDoubleSided = true
-                        mat.diffuse.contents = UIColor.white
-                        mat.ambient.contents = UIColor.white
-                        mat.locksAmbientWithDiffuse = true
-                        mat.shaderModifiers = [:] // clear any baked magenta shaders
+                        mat.shaderModifiers = [:]
+                        if mat.diffuse.contents == nil {
+                            mat.diffuse.contents = UIColor(white: 0.8, alpha: 1)
+                        }
                     }
                 }
                 let amb = SCNNode()
                 amb.light = SCNLight()
                 amb.light?.type = .ambient
-                amb.light?.intensity = 1100
+                amb.light?.intensity = 1000
                 amb.light?.color = UIColor.white
                 scene.rootNode.addChildNode(amb)
-
-                let key = SCNNode()
-                key.light = SCNLight()
-                key.light?.type = .directional
-                key.light?.intensity = 400
-                key.eulerAngles = SCNVector3(Float(-0.5), Float(0.35), Float(0))
-                scene.rootNode.addChildNode(key)
 
                 DispatchQueue.main.async {
                     v.scene = scene
@@ -683,20 +676,14 @@ final class FullEnvScanController: UIViewController, ARSessionDelegate {
     }
 
     private func ingestKeyframe(from frame: ARFrame) {
-        guard let copied = Self.copyPixelBuffer(frame.capturedImage) else { return }
-
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
-        let display = frame.displayTransform(for: orientation, viewportSize: viewport)
-
-        let kf = PhotoTexturedMeshBuilder.Keyframe(
-            camera: frame.camera,
-            image: copied,
+        guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
+            from: frame,
             orientation: orientation,
             viewport: viewport,
-            displayTransform: display,
-            capturedAt: frame.timestamp
-        )
+            maxWidth: 360
+        ) else { return }
 
         stateLock.lock()
         keyframes.append(kf)
