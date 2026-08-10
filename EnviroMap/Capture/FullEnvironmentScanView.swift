@@ -764,14 +764,20 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         let config = ARWorldTrackingConfiguration()
+        // Dense LiDAR mesh of everything (not RoomPlan walls-only)
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
             config.sceneReconstruction = .meshWithClassification
         } else {
             config.sceneReconstruction = .mesh
         }
         config.environmentTexturing = .automatic
+        config.planeDetection = [.horizontal, .vertical]
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             config.frameSemantics.insert(.sceneDepth)
+        }
+        // Smoother tracking → better mesh continuity
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            config.frameSemantics.insert(.smoothedSceneDepth)
         }
 
         isRunning = true
@@ -791,13 +797,27 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // Full-quality pull right before bake (main/caller may be background)
-        if let frame = arView?.session.currentFrame {
-            autoreleasepool {
-                ingestKeyframe(from: frame)
-                let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+        // Full-quality pull of EVERY live mesh anchor right before bake
+        guard let frame = arView?.session.currentFrame else { return }
+        autoreleasepool {
+            // Extra color frame from final pose
+            ingestKeyframe(from: frame)
+            let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+            // Prefer full quality; always overwrite live subsampled tiles
+            for mesh in meshes {
+                if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
+                    stateLock.lock()
+                    chunks[chunk.id] = chunk
+                    stateLock.unlock()
+                }
+            }
+            // If still empty, fall back to light copies rather than fail
+            stateLock.lock()
+            let empty = chunks.isEmpty
+            stateLock.unlock()
+            if empty {
                 for mesh in meshes {
-                    if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
+                    if let chunk = Self.copyChunk(from: mesh, fullQuality: false) {
                         stateLock.lock()
                         chunks[chunk.id] = chunk
                         stateLock.unlock()
@@ -1023,18 +1043,18 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
         // AI tips based on coverage progress + classification mix
-        if meshCount < 5 {
-            latestAITip = "Scan floors & walls first"
-        } else if meshCount < 20 {
-            latestAITip = "Circle objects slowly"
-        } else if meshCount < 45 {
-            latestAITip = "Fill gaps & corners"
-        } else if classCounts["floor", default: 0] < 3 {
-            latestAITip = "Scan under objects"
-        } else if classCounts["wall", default: 0] < 3 {
-            latestAITip = "Scan full wall height"
+        if meshCount < 8 {
+            latestAITip = "Keep moving — map floors first"
+        } else if meshCount < 25 {
+            latestAITip = "Circle the car / objects fully"
+        } else if meshCount < 50 {
+            latestAITip = "Hit every side + roof/top"
+        } else if meshCount < 80 {
+            latestAITip = "Fill holes — slow pass gaps"
+        } else if classCounts["floor", default: 0] < 2 {
+            latestAITip = "Sweep the floor under things"
         } else {
-            latestAITip = "Looking good — keep going"
+            latestAITip = "Strong coverage — Done when ready"
         }
     }
 
@@ -1153,13 +1173,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let faces = geom.faces
         let vCount = vSource.count
         guard vCount > 0, faces.count > 0 else { return nil }
-        // Allow larger anchors so cars/furniture stay complete
-        guard vCount < (fullQuality ? MeshDensityConfig.finalVertexSoftCap : MeshDensityConfig.liveVertexSoftCap) else { return nil }
 
-        // Live scan may lightly subsample; final harvest keeps full density.
+        // CRITICAL: never drop a whole anchor (that deleted cars/walls).
+        // Only subsample when huge. Done harvest uses step 1 unless insane.
         let step: Int
         if fullQuality {
-            step = 1
+            // Keep full mesh unless ARKit hands an extreme tile
+            step = vCount > MeshDensityConfig.finalVertexSoftCap ? 2 : 1
         } else {
             step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }

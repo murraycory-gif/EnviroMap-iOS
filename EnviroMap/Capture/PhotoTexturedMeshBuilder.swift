@@ -171,10 +171,11 @@ enum PhotoTexturedMeshBuilder {
             return SIMD3(w.x, w.y, w.z)
         }
 
-        let triStep = triCount > 80_000 ? 2 : 1
+        let triStep = triCount > 120_000 ? 2 : 1
 
-        // Group triangles by best keyframe index
+        // Group triangles by best keyframe index + solid fallback
         var groups: [Int: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)]] = [:]
+        var solidTris: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, (UInt8, UInt8, UInt8))] = []
 
         for ti in stride(from: 0, to: triCount, by: triStep) {
             let i0 = Int(chunk.indices[ti * 3])
@@ -217,7 +218,7 @@ enum PhotoTexturedMeshBuilder {
             var indices: [UInt32] = []
             positions.reserveCapacity(tris.count * 9)
             var vi: UInt32 = 0
-            let limit = min(tris.count, 50_000)
+            let limit = min(tris.count, 60_000)
             for tri in tris.prefix(limit) {
                 let (w0, w1, w2, n, uv0, uv1, uv2) = tri
                 for (w, uv) in [(w0, uv0), (w1, uv1), (w2, uv2)] {
@@ -273,7 +274,99 @@ enum PhotoTexturedMeshBuilder {
             parent.addChildNode(node)
         }
 
+        // Solid-color triangles for areas photos didn't cover (still real geometry)
+        if !solidTris.isEmpty {
+            if let solidNode = makeSolidGroupNode(tris: solidTris, name: "solid_\(index)") {
+                parent.addChildNode(solidNode)
+            }
+        }
+
         return parent.childNodes.isEmpty ? nil : parent
+    }
+
+    private static func makeSolidGroupNode(
+        tris: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, (UInt8, UInt8, UInt8))],
+        name: String
+    ) -> SCNNode? {
+        // Quantize by color → fewer materials
+        var buckets: [UInt32: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)]] = [:]
+        for (w0, w1, w2, n, rgb) in tris.prefix(40_000) {
+            let key = (UInt32(rgb.0 >> 3) << 10) | (UInt32(rgb.1 >> 3) << 5) | UInt32(rgb.2 >> 3)
+            buckets[key, default: []].append((w0, w1, w2, n))
+        }
+        let root = SCNNode()
+        root.name = name
+        for (key, list) in buckets {
+            var pos: [Float] = []
+            var nrm: [Float] = []
+            var idx: [UInt32] = []
+            var vi: UInt32 = 0
+            for (w0, w1, w2, n) in list {
+                for w in [w0, w1, w2] {
+                    pos.append(contentsOf: [w.x, w.y, w.z])
+                    nrm.append(contentsOf: [n.x, n.y, n.z])
+                    idx.append(vi); vi += 1
+                }
+            }
+            guard !pos.isEmpty else { continue }
+            let posD = pos.withUnsafeBufferPointer { Data(buffer: $0) }
+            let nrmD = nrm.withUnsafeBufferPointer { Data(buffer: $0) }
+            let idxD = idx.withUnsafeBufferPointer { Data(buffer: $0) }
+            let sources = [
+                SCNGeometrySource(data: posD, semantic: .vertex, vectorCount: pos.count/3,
+                                  usesFloatComponents: true, componentsPerVector: 3,
+                                  bytesPerComponent: 4, dataOffset: 0, dataStride: 12),
+                SCNGeometrySource(data: nrmD, semantic: .normal, vectorCount: nrm.count/3,
+                                  usesFloatComponents: true, componentsPerVector: 3,
+                                  bytesPerComponent: 4, dataOffset: 0, dataStride: 12),
+            ]
+            let elem = SCNGeometryElement(data: idxD, primitiveType: .triangles,
+                                          primitiveCount: idx.count/3, bytesPerIndex: 4)
+            let g = SCNGeometry(sources: sources, elements: [elem])
+            let r = CGFloat((key >> 10) & 31) / 31
+            let gch = CGFloat((key >> 5) & 31) / 31
+            let bch = CGFloat(key & 31) / 31
+            let mat = SCNMaterial()
+            mat.lightingModel = .constant
+            mat.isDoubleSided = true
+            mat.fillMode = .fill
+            mat.diffuse.contents = UIColor(red: r, green: gch, blue: bch, alpha: 1)
+            g.materials = [mat]
+            root.addChildNode(SCNNode(geometry: g))
+        }
+        return root.childNodes.isEmpty ? nil : root
+    }
+
+    private static func rankedKeyframeIndices(for world: SIMD3<Float>, keyframes: [Keyframe]) -> [Int]? {
+        var scored: [(Float, Int)] = []
+        for (i, kf) in keyframes.enumerated() {
+            let dist = simd_length(kf.camPos - world)
+            if dist < 0.05 || dist > 14 { continue }
+            let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
+            if view.z > -0.02 { continue }
+            let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
+            guard projected.x.isFinite, projected.y.isFinite else { continue }
+            let nx = projected.x / max(kf.viewport.width, 1)
+            let ny = projected.y / max(kf.viewport.height, 1)
+            guard nx >= -0.05, nx <= 1.05, ny >= -0.05, ny <= 1.05 else { continue }
+            let score = (1.0 / max(dist, 0.15)) * (1.0 - abs(Float(nx) - 0.5)) * (1.0 - abs(Float(ny) - 0.5))
+            scored.append((score, i))
+        }
+        guard !scored.isEmpty else { return nil }
+        return scored.sorted { $0.0 > $1.0 }.map { $0.1 }
+    }
+
+    private static func sampleRGB(world: SIMD3<Float>, kf: Keyframe) -> (UInt8, UInt8, UInt8)? {
+        let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
+        guard projected.x.isFinite, projected.y.isFinite else { return nil }
+        let nx = projected.x / max(kf.viewport.width, 1)
+        let ny = projected.y / max(kf.viewport.height, 1)
+        guard nx >= 0, nx <= 1, ny >= 0, ny <= 1 else { return nil }
+        let x = min(kf.rgbWidth - 1, max(0, Int(nx * Float(kf.rgbWidth))))
+        let y = min(kf.rgbHeight - 1, max(0, Int(ny * Float(kf.rgbHeight))))
+        let o = (y * kf.rgbWidth + x) * 3
+        guard o + 2 < kf.rgb.count else { return nil }
+        return (kf.rgb[o], kf.rgb[o+1], kf.rgb[o+2])
     }
 
     private static func bestKeyframeIndex(for world: SIMD3<Float>, keyframes: [Keyframe]) -> (Int, Keyframe)? {

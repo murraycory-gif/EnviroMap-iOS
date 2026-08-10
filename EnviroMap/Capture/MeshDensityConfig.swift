@@ -1,41 +1,49 @@
 import Foundation
 
-/// Live = smooth. Done harvest = quality.
+/// CAPTURE-FIRST: never drop whole objects. Live stays light; Done harvests full mesh.
 enum MeshDensityConfig {
     static var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
     }
 
-    // Live smooth
-    static var meshCopyInterval: TimeInterval { 0.35 }
-    static var keyframeInterval: TimeInterval { 0.40 }
-    static var maxKeyframes: Int { 28 }
-    static var maxChunks: Int { 700 }
-    static var keyframeMaxWidth: Int { 360 }
-    static var liveVertexSoftCap: Int { 32_000 }
+    // MARK: Live — frequent mesh, light color, smooth
+
+    static var meshCopyInterval: TimeInterval { 0.20 }  // more mesh updates = better coverage
+    static var keyframeInterval: TimeInterval { 0.35 }
+    static var maxKeyframes: Int { 32 }
+    static var maxChunks: Int { 1500 }  // keep many tiles (cars = many anchors)
+    static var keyframeMaxWidth: Int { 400 }
+
+    /// Soft target for live subsample — NEVER discard the whole anchor
+    static var liveVertexTarget: Int { 48_000 }
+    static var liveFaceTarget: Int { 60_000 }
 
     static func liveVertexStep(vCount: Int) -> Int {
-        if vCount > 45_000 { return 3 }
-        if vCount > 22_000 { return 2 }
+        // Subsample only; keep every anchor
+        if vCount > 120_000 { return 4 }
+        if vCount > 80_000 { return 3 }
+        if vCount > 48_000 { return 2 }
         return 1
     }
 
     static func liveFaceStep(faceCount: Int) -> Int {
-        if faceCount > 30_000 { return 3 }
-        if faceCount > 15_000 { return 2 }
+        if faceCount > 100_000 { return 4 }
+        if faceCount > 60_000 { return 3 }
+        if faceCount > 40_000 { return 2 }
         return 1
     }
 
-    // Done quality
-    static var finalVertexSoftCap: Int { highDetail ? 200_000 : 130_000 }
-    static var triangleBudget: Int { highDetail ? 240_000 : 150_000 }
-    static var bakeKeyframeLimit: Int { 28 }
+    // MARK: Done harvest — full power
+
+    static var finalVertexSoftCap: Int { 400_000 }  // only skip insane anchors
+    static var triangleBudget: Int { highDetail ? 320_000 : 200_000 }
+    static var bakeKeyframeLimit: Int { 32 }
     static var samplesPerTriangle: Int { 4 }
     static var quantizeShift: Int { 3 }
 
     static func blueWireFaceStep(faceCount: Int) -> Int {
-        if faceCount > 4_000 { return 10 }
-        if faceCount > 1_500 { return 7 }
-        return 5
+        if faceCount > 5_000 { return 8 }
+        if faceCount > 2_000 { return 5 }
+        return 3
     }
 }
