@@ -221,6 +221,108 @@ struct FullEnvironmentScanView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+
+    // MARK: - Edgy processing / loading screen
+
+    private var processingLayer: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(red: 0.02, green: 0.05, blue: 0.14),
+                    Color(red: 0.04, green: 0.10, blue: 0.28),
+                    Color(red: 0.01, green: 0.03, blue: 0.10),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            Circle()
+                .fill(AppTheme.blue.opacity(0.18))
+                .frame(width: 280, height: 280)
+                .blur(radius: 50)
+                .offset(x: -40, y: -120)
+            Circle()
+                .fill(Color.cyan.opacity(0.10))
+                .frame(width: 220, height: 220)
+                .blur(radius: 40)
+                .offset(x: 80, y: 160)
+
+            VStack(spacing: 28) {
+                Spacer()
+
+                ZStack {
+                    Circle()
+                        .stroke(AppTheme.blue.opacity(0.2), lineWidth: 6)
+                        .frame(width: 120, height: 120)
+                    Circle()
+                        .trim(from: 0, to: max(0.05, model.bakeProgress))
+                        .stroke(
+                            AngularGradient(
+                                colors: [AppTheme.blue, Color.cyan, AppTheme.blueDeep, AppTheme.blue],
+                                center: .center
+                            ),
+                            style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                        )
+                        .frame(width: 120, height: 120)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeInOut(duration: 0.35), value: model.bakeProgress)
+
+                    VStack(spacing: 2) {
+                        Image(systemName: "cube.transparent.fill")
+                            .font(.system(size: 32, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text("\(Int(model.bakeProgress * 100))%")
+                            .font(.caption.weight(.bold).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+
+                VStack(spacing: 10) {
+                    Text("Building Your World")
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(model.bakeStatus)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.cyan.opacity(0.9))
+                        .multilineTextAlignment(.center)
+                        .animation(.easeInOut, value: model.bakeStatus)
+                }
+
+                HStack(spacing: 10) {
+                    processChip("\(model.meshChunks)", "Surfaces")
+                    processChip(model.hasColorFrames ? "Color" : "…", "Paint")
+                    processChip(model.coverageLabel, "Cover")
+                }
+                .padding(.top, 8)
+
+                Text("Mapping real colors onto LiDAR mesh\nHang tight — this is the magic step.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.45))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+
+                Spacer()
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+        }
+    }
+
+    private func processChip(_ value: String, _ label: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.white)
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
     // MARK: - Preview before save (light AppTheme design)
 
     private var previewLayer: some View {
@@ -491,9 +593,7 @@ struct PreviewMeshView: UIViewRepresentable {
             guard let mats = node.geometry?.materials else { return }
             for mat in mats {
                 // Keep colors; lambert shows form
-                if mat.lightingModel != .lambert {
-                    mat.lightingModel = .lambert
-                }
+                mat.lightingModel = .constant
                 mat.isDoubleSided = true
                 mat.shaderModifiers = [:]
             }
