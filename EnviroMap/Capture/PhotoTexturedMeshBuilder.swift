@@ -450,42 +450,55 @@ enum PhotoTexturedMeshBuilder {
         var bestW: Float = -1
         var bestC: (UInt8, UInt8, UInt8)?
         var bestLuma: Float = 0.5
+        var secondW: Float = -1
+        var secondC: (UInt8, UInt8, UInt8)?
 
-        // Prefer well-exposed samples (works dark rooms + bright outdoors)
         for kf in keyframes.reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.05 || dist > 8 { continue }
+            if dist < 0.04 || dist > 7.5 { continue }
             let viewDir = toCam / max(dist, 1e-4)
             let facing = abs(simd_dot(normal, viewDir))
-            if facing < 0.04 { continue }
+            if facing < 0.05 { continue }
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
             if view.z > -0.04 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
 
             let expQ = sampleExposureQuality(c)
-            if expQ < 0.08 { continue } // skip pure black / blown white
+            if expQ < 0.12 { continue }
 
             let cx = 1 - abs(uv.x - 0.5)
             let cy = 1 - abs(uv.y - 0.5)
             let center = cx * cy
             let frameQ = frameExposureQuality(kf.meanLuma)
-            let frameBoost: Float = 0.75 + 0.25 * frameQ
-            // Closer + more head-on = sharper real color
-            let distTerm: Float = 1.0 / max(dist * dist, 0.08)
-            let centerTerm: Float = 0.25 + 0.75 * center
+            let frameBoost: Float = 0.7 + 0.3 * frameQ
+            let distTerm: Float = 1.0 / max(dist * dist, 0.06)
+            let centerTerm: Float = 0.2 + 0.8 * center
             let faceBoost = Float(facing * facing)
             let w = faceBoost * distTerm * centerTerm * expQ * frameBoost
             if w > bestW {
+                secondW = bestW
+                secondC = bestC
                 bestW = w
                 bestC = c
                 bestLuma = kf.meanLuma
-                if w > 4.5 { break }
+            } else if w > secondW {
+                secondW = w
+                secondC = c
             }
+            if bestW > 5.0 && secondW > 1.5 { break }
         }
-        if let c = bestC {
-            return adaptiveEnhance(c, sceneLuma: bestLuma)
+
+        if let c1 = bestC {
+            if let c2 = secondC, secondW > bestW * 0.35, secondW > 0.8 {
+                let t: Float = 0.65
+                let r = UInt8(Float(c1.0) * t + Float(c2.0) * (1 - t))
+                let g = UInt8(Float(c1.1) * t + Float(c2.1) * (1 - t))
+                let bl = UInt8(Float(c1.2) * t + Float(c2.2) * (1 - t))
+                return adaptiveEnhance((r, g, bl), sceneLuma: bestLuma)
+            }
+            return adaptiveEnhance(c1, sceneLuma: bestLuma)
         }
 
         if let dc = nearestDepthColor(world) {
@@ -493,6 +506,7 @@ enum PhotoTexturedMeshBuilder {
         }
         return Self.visibleGray
     }
+
 
     /// 0...1 — how usable is this pixel (reject crushed blacks / blown highlights)
     private static func sampleExposureQuality(_ c: (UInt8, UInt8, UInt8)) -> Float {
