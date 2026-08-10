@@ -45,8 +45,13 @@ struct FullEnvironmentScanView: View {
         .onAppear {
             if name.isEmpty { name = defaultName() }
             model.onExportReady = {
-                // Must hop to main; bake completion already on main
-                autoSaveAndOpenViewer()
+                if Thread.isMainThread {
+                    autoSaveAndOpenViewer()
+                } else {
+                    DispatchQueue.main.async {
+                        autoSaveAndOpenViewer()
+                    }
+                }
             }
             model.start()
         }
@@ -308,12 +313,12 @@ struct FullEnvironmentScanView: View {
                 PhotoTexturedMeshBuilder.normalizeForPreview(scene)
                 _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
             }
-            // Ensure file exists even if empty write failed — write again
             if !FileManager.default.fileExists(atPath: scnURL.path), let scene = payload.scene {
                 _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
             }
             do {
-                let session = try storeRef.saveFullEnvironment(
+                // File I/O only — never touch @Published here
+                let session = try storeRef.prepareFullEnvironment(
                     name: nm,
                     notes: "Full environment LiDAR + photo color",
                     meshFileName: payload.fileName,
@@ -322,15 +327,20 @@ struct FullEnvironmentScanView: View {
                     meshChunkCount: chunks
                 )
                 DispatchQueue.main.async {
-                    self.didSave = true
-                    self.model.controller.stop()
-                    self.model.bakeProgress = 1
-                    self.model.bakeStatus = "Opening scan…"
-                    self.savedSessionForViewer = session
+                    do {
+                        try storeRef.commitSession(session)
+                        self.didSave = true
+                        self.model.controller.stop()
+                        self.model.bakeProgress = 1
+                        self.model.bakeStatus = "Opening Scan…"
+                        self.savedSessionForViewer = session
+                    } catch {
+                        self.model.phase = .failed("Save Failed: \(error.localizedDescription)")
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.model.phase = .failed("Save failed: \(error.localizedDescription)")
+                    self.model.phase = .failed("Save Failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -874,17 +884,17 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             var all = chunks
             stateLock.unlock()
 
-            // 5 densify passes — hold still; ARKit fills gaps between pulls
-            for pass in 0..<5 {
+            // 6 densify passes — hold still; ARKit fills gaps between pulls
+            for pass in 0..<6 {
                 if let frame = session.currentFrame {
                     ingestKeyframe(from: frame)
                     merge(&all, pull(from: frame))
-                    if pass == 0 || pass == 2 || pass == 4 {
+                    if pass == 0 || pass == 2 || pass == 5 {
                         ingestDepthPoints(from: frame)
                     }
                 }
-                if pass < 4 {
-                    Thread.sleep(forTimeInterval: 0.32)
+                if pass < 5 {
+                    Thread.sleep(forTimeInterval: 0.30)
                 }
             }
 
@@ -960,14 +970,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let now = CACurrentMediaTime()
         if let last = lastVizTime[id], now - last < 0.75 {
             // Still bank denser geometry periodically even if wire skipped
-            bankMeshNow(mesh, minInterval: 0.45)
+            bankMeshNow(mesh, minInterval: 0.32)
             noteClassification(from: mesh)
             return
         }
         lastVizTime[id] = now
         applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
-        bankMeshNow(mesh, minInterval: 0.45)
+        bankMeshNow(mesh, minInterval: 0.32)
     }
 
     /// Sync-copy one mesh tile into densest bank (ARMesh only valid here)
@@ -1272,10 +1282,15 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     private func emitStats(meshCount: Int, frameCount: Int) {
         let now = CACurrentMediaTime()
-        if now - lastStatsEmit < 0.6 { return }
+        if now - lastStatsEmit < 0.55 { return }
         lastStatsEmit = now
-        DispatchQueue.main.async { [weak self] in
-            self?.onStats?(meshCount, frameCount)
+        // Always hop to main — ARSession may call from a background queue
+        if Thread.isMainThread {
+            onStats?(meshCount, frameCount)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.onStats?(meshCount, frameCount)
+            }
         }
     }
 
