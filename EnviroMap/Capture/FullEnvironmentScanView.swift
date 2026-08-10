@@ -1106,8 +1106,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         // Only drop if extreme (protects memory); prefer completeness
         if chunks.count > maxChunks {
-            // Drop smallest chunks first (least detail), not oldest scanned areas
-            let ranked = chunks.values.sorted { $0.positions.count < $1.positions.count }
+            // Keep small detail chunks (cars, furniture edges). Drop largest bulk first.
+            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
             let removeCount = chunks.count - maxChunks
             for i in 0..<removeCount {
                 chunks.removeValue(forKey: ranked[i].id)
