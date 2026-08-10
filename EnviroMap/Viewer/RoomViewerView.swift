@@ -126,6 +126,9 @@ struct RoomViewerView: View {
                 // Simple how-to + status
                 if !isLoading, loadError == nil, fileExists {
                     VStack(spacing: 8) {
+                        Text(BuildStamp.id)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
                         Text("Drag To Spin  ·  Pinch To Zoom")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.white.opacity(0.85))

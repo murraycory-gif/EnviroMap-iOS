@@ -13,6 +13,7 @@
 		A004 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B004 /* SettingsView.swift */; };
 		A005 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B005 /* OnboardingView.swift */; };
 		A006 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = B006 /* AppTheme.swift */; };
+		A099 /* BuildStamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B099 /* BuildStamp.swift */; };
 		A007 /* EnviroMapLogo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B007 /* EnviroMapLogo.swift */; };
 		A008 /* RoomPlanHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B008 /* RoomPlanHubView.swift */; };
 		A009 /* RoomPlannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B009 /* RoomPlannerView.swift */; };
@@ -49,6 +50,7 @@
 		B004 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
 		B005 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OnboardingView.swift"; sourceTree = "<group>"; };
 		B006 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppTheme.swift"; sourceTree = "<group>"; };
+		B099 /* BuildStamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BuildStamp.swift"; sourceTree = "<group>"; };
 		B007 /* EnviroMapLogo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EnviroMapLogo.swift"; sourceTree = "<group>"; };
 		B008 /* RoomPlanHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RoomPlanHubView.swift"; sourceTree = "<group>"; };
 		B009 /* RoomPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RoomPlannerView.swift"; sourceTree = "<group>"; };
@@ -114,6 +116,7 @@
 				B004 /* SettingsView.swift */,
 				B005 /* OnboardingView.swift */,
 				B006 /* AppTheme.swift */,
+				B099 /* BuildStamp.swift */,
 				B007 /* EnviroMapLogo.swift */,
 				B008 /* RoomPlanHubView.swift */,
 				B009 /* RoomPlannerView.swift */,
@@ -231,6 +234,7 @@
 				A004 /* SettingsView.swift in Sources */,
 				A005 /* OnboardingView.swift in Sources */,
 				A006 /* AppTheme.swift in Sources */,
+				A099 /* BuildStamp.swift in Sources */,
 				A007 /* EnviroMapLogo.swift in Sources */,
 				A008 /* RoomPlanHubView.swift in Sources */,
 				A009 /* RoomPlannerView.swift in Sources */,

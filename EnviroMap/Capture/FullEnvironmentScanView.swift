@@ -116,13 +116,17 @@ struct FullEnvironmentScanView: View {
 
             Spacer(minLength: 0)
 
-            // Quiet AI tip as single line (no big box)
-            if model.phase == .scanning, !model.aiCoachTip.isEmpty {
-                Text(model.aiCoachTip.replacingOccurrences(of: "AI: ", with: ""))
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(1)
-                    .frame(maxWidth: 120, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(BuildStamp.id)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
+                if model.phase == .scanning, !model.aiCoachTip.isEmpty {
+                    Text(model.aiCoachTip.replacingOccurrences(of: "AI: ", with: ""))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                        .frame(maxWidth: 130, alignment: .trailing)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -155,7 +159,7 @@ struct FullEnvironmentScanView: View {
                 Button {
                     model.finishScanning()
                 } label: {
-                    Label("Done — Save Scan", systemImage: "checkmark.circle.fill")
+                    Label("Finish Scan", systemImage: "checkmark.circle.fill")
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -260,6 +264,9 @@ struct FullEnvironmentScanView: View {
 
                 VStack(spacing: 10) {
                     Text("Building Your World")
+                    Text(BuildStamp.label)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
                         .font(.system(size: 26, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                     Text(model.bakeStatus)
