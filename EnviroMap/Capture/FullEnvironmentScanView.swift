@@ -10,7 +10,9 @@ struct FullEnvironmentScanView: View {
     @Environment(\.dismiss) private var dismiss
 
     @StateObject private var model = FullEnvironmentScanModel()
-    @State private var name: String = ""
+    @State private var name: String = {
+        let f = DateFormatter(); f.dateFormat = "MMM d · h:mm a"; return "Space \(f.string(from: Date()))"
+    }()
     @State private var saveError: String?
     @State private var didSave = false
     @State private var savedSessionForViewer: RoomSession?
@@ -19,39 +21,32 @@ struct FullEnvironmentScanView: View {
         ZStack {
             Color(red: 0.06, green: 0.08, blue: 0.14).ignoresSafeArea()
 
-            switch model.phase {
-            case .idle, .scanning, .failed:
-                scanCameraLayer
-            case .processing, .saving:
-                processingLayer
-            case .preview:
-                // Legacy — should not stay here; we open the real viewer
-                processingLayer
-            }
-
-            // After bake: open the actual Room viewer (not the broken black Review)
             if let session = savedSessionForViewer {
                 NavigationStack {
                     RoomViewerView(session: session)
                         .environmentObject(store)
                         .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
+                            ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") {
                                     model.stop()
                                     dismiss()
                                 }
-                                .fontWeight(.semibold)
+                                .fontWeight(.bold)
                             }
                         }
                 }
-                .transition(.opacity)
+            } else {
+                switch model.phase {
+                case .idle, .scanning, .failed:
+                    scanCameraLayer
+                case .processing, .saving, .preview:
+                    processingLayer
+                }
             }
         }
         .preferredColorScheme(.dark)
-        .onChange(of: model.phase) { _, newPhase in
-            if newPhase == .preview {
-                autoSaveAndOpenViewer()
-            }
+        .onChange(of: model.exportReadyToken) { _, _ in
+            autoSaveAndOpenViewer()
         }
         .onAppear {
             if name.isEmpty { name = defaultName() }
@@ -310,176 +305,28 @@ struct FullEnvironmentScanView: View {
         .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    // MARK: - Preview before save (light AppTheme design)
 
-    private var previewLayer: some View {
-        ZStack {
-            // Full-screen 3D is the product — not a tiny card
-            Color.black.ignoresSafeArea()
-
-            Group {
-                if let scene = model.previewScene {
-                    PreviewMeshView(scene: scene, resetToken: model.viewResetToken)
-                } else if let url = model.previewMeshURL {
-                    PreviewMeshView(url: url, resetToken: model.viewResetToken)
-                } else {
-                    ProgressView().tint(.white)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .ignoresSafeArea()
-
-            // Top chrome
-            VStack(spacing: 0) {
-                HStack {
-                    // Delete / discard
-                    Button {
-                        model.rescan()
-                    } label: {
-                        Image(systemName: "trash.fill")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .background(Color.red.opacity(0.85), in: Circle())
-                    }
-                    .accessibilityLabel("Delete Scan")
-
-                    Spacer()
-
-                    Text("Your Scan")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: Capsule())
-
-                    Spacer()
-
-                    // Save
-                    Button {
-                        save()
-                    } label: {
-                        Group {
-                            if model.phase == .saving {
-                                ProgressView().tint(.white)
-                            } else {
-                                Image(systemName: "square.and.arrow.down.fill")
-                                    .font(.body.weight(.semibold))
-                            }
-                        }
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .background(
-                            LinearGradient(
-                                colors: [AppTheme.blue, AppTheme.blueDeep],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            in: Circle()
-                        )
-                    }
-                    .disabled(didSave || model.phase == .saving)
-                    .accessibilityLabel("Save Scan")
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-
-                Spacer()
-
-                // Bottom sheet: name + actions
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Label("Drag To Spin · Pinch To Zoom", systemImage: "hand.draw.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                        Spacer()
-                        Text("Full Color")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(AppTheme.blue)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.white, in: Capsule())
-                    }
-
-                    Text("Name")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.7))
-                    TextField("Space name", text: $name)
-                        .textFieldStyle(.plain)
-                        .padding(14)
-                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .foregroundStyle(.white)
-
-                    HStack(spacing: 10) {
-                        Button {
-                            model.rescan()
-                        } label: {
-                            Text("Rescan")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 16)
-                                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous))
-                        }
-
-                        Button {
-                            save()
-                        } label: {
-                            Group {
-                                if model.phase == .saving {
-                                    ProgressView().tint(.white)
-                                } else {
-                                    Text("Save To My Rooms")
-                                        .font(.headline.weight(.bold))
-                                }
-                            }
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                            .background(
-                                LinearGradient(
-                                    colors: [AppTheme.blue, AppTheme.blueDeep],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                ),
-                                in: RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
-                            )
-                        }
-                        .disabled(didSave || model.phase == .saving)
-                    }
-                }
-                .padding(18)
-                .background(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(Color.black.opacity(0.72))
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                )
-                .padding(.horizontal, 12)
-                .padding(.bottom, 16)
-            }
-        }
-        .preferredColorScheme(.dark)
-        .alert("Could Not Save", isPresented: Binding(
-            get: { saveError != nil },
-            set: { if !$0 { saveError = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(saveError ?? "")
-        }
+    private func defaultName() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d · h:mm a"
+        return "Space \(f.string(from: Date()))"
     }
 
-    private func save() {
+    /// Save mesh to My Rooms and open the real viewer (no black Review screen).
+    private func autoSaveAndOpenViewer() {
+        guard savedSessionForViewer == nil else { return }
         guard let payload = model.exportPayload else {
-            saveError = "No mesh to save. Scan again."
+            model.phase = .failed("No mesh built. Scan again and cover more surfaces.")
             return
         }
         model.phase = .saving
-        let nm = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.bakeStatus = "Saving to My Rooms…"
+        model.bakeProgress = 0.98
+
+        let nm = name.isEmpty ? defaultName() : name.trimmingCharacters(in: .whitespacesAndNewlines)
         let preview = model.previewImage
         let chunks = model.meshChunks
         let storeRef = store
-        let ctrl = model.controller
 
         DispatchQueue.global(qos: .userInitiated).async {
             let scnURL = payload.directory.appendingPathComponent(payload.fileName)
@@ -487,8 +334,12 @@ struct FullEnvironmentScanView: View {
                 PhotoTexturedMeshBuilder.normalizeForPreview(scene)
                 _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
             }
+            // Ensure file exists even if empty write failed — write again
+            if !FileManager.default.fileExists(atPath: scnURL.path), let scene = payload.scene {
+                _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
+            }
             do {
-                _ = try storeRef.saveFullEnvironment(
+                let session = try storeRef.saveFullEnvironment(
                     name: nm,
                     notes: "Full environment LiDAR + photo color",
                     meshFileName: payload.fileName,
@@ -498,26 +349,22 @@ struct FullEnvironmentScanView: View {
                 )
                 DispatchQueue.main.async {
                     self.didSave = true
-                    ctrl.stop()
-                    self.dismiss()
+                    self.model.controller.stop()
+                    self.model.bakeProgress = 1
+                    self.model.bakeStatus = "Opening scan…"
+                    self.savedSessionForViewer = session
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.model.phase = .preview
-                    self.saveError = error.localizedDescription
+                    self.model.phase = .failed("Save failed: \(error.localizedDescription)")
                 }
             }
         }
     }
-
-    private func defaultName() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d · h:mm a"
-        return "Space \(f.string(from: Date()))"
-    }
 }
 
-// MARK: - Preview SCNView
+
+// PreviewMeshView kept for optional debug only
 
 struct PreviewMeshView: UIViewRepresentable {
     var scene: SCNScene? = nil
@@ -719,6 +566,7 @@ final class FullEnvironmentScanModel: ObservableObject {
     @Published var viewResetToken: Int = 0
     @Published var bakeProgress: Double = 0
     @Published var bakeStatus: String = "Preparing…"
+    @Published var exportReadyToken: Int = 0
 
     let controller = FullEnvScanController()
 
@@ -792,14 +640,12 @@ final class FullEnvironmentScanModel: ObservableObject {
                     self.exportPayload = result
                     self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
                     self.previewScene = scene
-                    self.viewResetToken += 1
-                    self.bakeProgress = 1
-                    self.bakeStatus = "Ready"
-                    self.phase = .preview
-                    self.statusTitle = "Review"
-                    self.instruction = "Drag to spin · Pinch to zoom"
+                    self.bakeProgress = 0.97
+                    self.bakeStatus = "Saving to My Rooms…"
+                    self.phase = .saving
                     self.controller.stop()
-                    self.controller.persistExportInBackground(result)
+                    // View listens to exportReadyToken and opens the real Rooms viewer
+                    self.exportReadyToken += 1
                 } else {
                     // Never silent-fail: show actionable error
                     let mc = self.meshChunks

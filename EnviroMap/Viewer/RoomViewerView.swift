@@ -2,6 +2,7 @@ import SwiftUI
 import SceneKit
 import UIKit
 import QuickLook
+import simd
 
 /// Offline 3D mesh viewer (SceneKit — no ARView, won’t freeze the UI).
 struct RoomViewerView: View {
@@ -172,11 +173,15 @@ struct MeshSceneView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
-        view.backgroundColor = .clear
+        view.backgroundColor = UIColor.black
         view.autoenablesDefaultLighting = true
         view.allowsCameraControl = true
-        view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 60
+        view.antialiasingMode = .multisampling2X
+        view.preferredFramesPerSecond = 30
+        view.isPlaying = true
+        view.rendersContinuously = true
+        view.defaultCameraController.interactionMode = .orbitTurntable
+        view.defaultCameraController.inertiaEnabled = true
         // Empty scene first so navigation isn’t blocked
         view.scene = SCNScene()
         context.coordinator.view = view
@@ -189,6 +194,62 @@ struct MeshSceneView: UIViewRepresentable {
     func updateUIView(_ uiView: SCNView, context: Context) {}
 
     final class Coordinator {
+        /// Frame camera on the actual mesh so user sees the scan immediately (not empty sky).
+        static func frameMesh(in view: SCNView, scene: SCNScene) {
+            PhotoTexturedMeshBuilder.normalizeForPreview(scene)
+
+            let mesh = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
+            var minV = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var maxV = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+            var found = false
+            func visit(_ n: SCNNode) {
+                if let g = n.geometry {
+                    let (bmin, bmax) = g.boundingBox
+                    for c in [SCNVector3(bmin.x, bmin.y, bmin.z), SCNVector3(bmax.x, bmax.y, bmax.z),
+                              SCNVector3(bmin.x, bmax.y, bmin.z), SCNVector3(bmax.x, bmin.y, bmax.z)] {
+                        let w = n.convertPosition(c, to: scene.rootNode)
+                        minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
+                        maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
+                        found = true
+                    }
+                }
+                for c in n.childNodes { visit(c) }
+            }
+            visit(mesh)
+            guard found else { return }
+
+            let center = SCNVector3(
+                (minV.x + maxV.x) * 0.5,
+                (minV.y + maxV.y) * 0.5,
+                (minV.z + maxV.z) * 0.5
+            )
+            var radius = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z)) * 0.5
+            radius = max(radius, 0.4)
+            let dist = radius * 2.4
+
+            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
+
+            let cam = SCNNode()
+            cam.name = "previewCam"
+            cam.camera = SCNCamera()
+            cam.camera?.fieldOfView = 50
+            cam.camera?.zNear = 0.01
+            cam.camera?.zFar = Double(max(120, radius * 40))
+            // Look slightly above center so car/floor sit in the lower 2/3 (natural)
+            cam.position = SCNVector3(center.x + dist * 0.55, center.y + dist * 0.35, center.z + dist * 0.9)
+            let look = SCNLookAtConstraint(target: mesh)
+            look.isGimbalLockEnabled = true
+            cam.constraints = [look]
+            scene.rootNode.addChildNode(cam)
+
+            view.pointOfView = cam
+            view.defaultCameraController.pointOfView = cam
+            view.defaultCameraController.target = center
+            view.defaultCameraController.interactionMode = .orbitTurntable
+            view.allowsCameraControl = true
+            view.autoenablesDefaultLighting = true
+        }
+
         weak var view: SCNView?
         private var didLoad = false
 
@@ -234,13 +295,13 @@ struct MeshSceneView: UIViewRepresentable {
                     DispatchQueue.main.async { [weak self] in
                         guard let scnView = self?.view else { return }
                         scnView.scene = scene
-                        scnView.pointOfView = scene.rootNode.childNode(withName: "previewCam", recursively: true)
-                            ?? scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).first
-                        scnView.defaultCameraController.target = SCNVector3Zero
-                        scnView.autoenablesDefaultLighting = true
-                        scnView.allowsCameraControl = true
-                        // Default camera control target
-                        scnView.defaultCameraController.automaticTarget = true
+                        Self.frameMesh(in: scnView, scene: scene)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                            Self.frameMesh(in: scnView, scene: scene)
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            Self.frameMesh(in: scnView, scene: scene)
+                        }
                         scnView.defaultCameraController.inertiaEnabled = true
                         isLoading.wrappedValue = false
                     }

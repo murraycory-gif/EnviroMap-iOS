@@ -43,7 +43,7 @@ enum PhotoTexturedMeshBuilder {
                   let nameHint = node.name, nameHint.hasPrefix("texChunk_") else { return }
             let file = "\(nameHint).jpg"
             let url = directory.appendingPathComponent(file)
-            if let data = img.jpegData(compressionQuality: 0.92) {
+            if let data = img.jpegData(compressionQuality: 0.95) {
                 try? data.write(to: url)
                 // Keep in-memory image for Review; path helps disk reload
                 mat.diffuse.contents = img
@@ -198,7 +198,7 @@ enum PhotoTexturedMeshBuilder {
             let du1 = abs(uv0.x - uv1.x) + abs(uv0.y - uv1.y)
             let du2 = abs(uv1.x - uv2.x) + abs(uv1.y - uv2.y)
             let du3 = abs(uv2.x - uv0.x) + abs(uv2.y - uv0.y)
-            if du1 > 1.15 || du2 > 1.15 || du3 > 1.15 { continue }
+            if du1 > 1.35 || du2 > 1.35 || du3 > 1.35 { continue }
 
             groups[kfIdx, default: []].append((w0, w1, w2, n, uv0, uv1, uv2))
         }
@@ -217,7 +217,7 @@ enum PhotoTexturedMeshBuilder {
             var indices: [UInt32] = []
             positions.reserveCapacity(tris.count * 9)
             var vi: UInt32 = 0
-            let limit = min(tris.count, 35_000)
+            let limit = min(tris.count, 50_000)
             for tri in tris.prefix(limit) {
                 let (w0, w1, w2, n, uv0, uv1, uv2) = tri
                 for (w, uv) in [(w0, uv0), (w1, uv1), (w2, uv2)] {
