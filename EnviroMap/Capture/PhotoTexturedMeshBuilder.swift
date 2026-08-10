@@ -107,6 +107,9 @@ enum PhotoTexturedMeshBuilder {
 
         let kfs = selectKeyframes(keyframes, limit: MeshDensityConfig.bakeKeyframeLimit)
         let photos: [UIImage?] = kfs.map { imageFromRGB($0.rgb, width: $0.rgbWidth, height: $0.rgbHeight) }
+        func kiOk(_ i: Int) -> Bool {
+            i >= 0 && i < photos.count && photos[i] != nil
+        }
 
         let scene = SCNScene()
         scene.background.contents = UIColor(white: 0.08, alpha: 1)
@@ -209,9 +212,41 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Photo texture disabled — solid vertex colors only
+                // Photo texture when projection is CLEAN (sharp like a photo)
+                if !colorBudgetExhausted,
+                   texTris < 120_000,
+                   let pick = bestProjection(world: mid, normal: nMid, keyframes: kfs),
+                   pick.score > 0.42,
+                   kiOk(pick.index),
+                   let uv0 = projectUV(world: w0, kf: kfs[pick.index]),
+                   let uv1 = projectUV(world: w1, kf: kfs[pick.index]),
+                   let uv2 = projectUV(world: w2, kf: kfs[pick.index]) {
+                    let e01 = simd_length(uv1 - uv0)
+                    let e12 = simd_length(uv2 - uv1)
+                    let e20 = simd_length(uv0 - uv2)
+                    let maxEdge = max(e01, max(e12, e20))
+                    let uvArea = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y))
+                    // Reject stretch / tiny / huge UV (warp = blur)
+                    if uvArea > 2e-5, maxEdge > 0.004, maxEdge < 0.35 {
+                        let ki = pick.index
+                        func pushT(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
+                            texPos[ki].append(contentsOf: [w.x, w.y, w.z])
+                            texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
+                            texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
+                            let id = texBase[ki]
+                            texBase[ki] += 1
+                            return id
+                        }
+                        texIdx[ki].append(contentsOf: [
+                            pushT(w0, n0, uv0), pushT(w1, n1, uv1), pushT(w2, n2, uv2)
+                        ])
+                        texTris += 1
+                        triUsed += 1
+                        continue
+                    }
+                }
 
-                // Vertex color (main path)
+                // Vertex color (fallback / sides / thin bits)
                 func emit(_ i: Int) -> UInt32 {
                     if let e = remap[i] { return e }
                     let w = worldP(i)
@@ -229,7 +264,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.16, triUsed < triBudget {
+                if edge > 0.11, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -286,6 +321,8 @@ enum PhotoTexturedMeshBuilder {
             mat.diffuse.wrapT = .clamp
             mat.diffuse.magnificationFilter = .linear
             mat.diffuse.minificationFilter = .linear
+            mat.diffuse.mipFilter = .none
+            mat.diffuse.contentsTransform = SCNMatrix4Identity
             geom.materials = [mat]
             let node = SCNNode(geometry: geom)
             node.name = "photoSharp_\(ki)"
@@ -308,7 +345,7 @@ enum PhotoTexturedMeshBuilder {
         // Solid depth patches fill black holes (quads, not grainy points)
         if !depthPoints.isEmpty {
             progressHandler?(0.9, "Filling Gaps…")
-            if let fill = makeDepthFillQuads(depthPoints) {
+            if let fill = makeDepthFillQuads(depthPoints, meshPositions: allPos) {
                 root.addChildNode(fill)
             }
         }
@@ -338,40 +375,63 @@ enum PhotoTexturedMeshBuilder {
 
 
 
-    /// Fills black holes with small solid colored quads from LiDAR depth.
-    private static func makeDepthFillQuads(_ points: [ColoredDepthPoint]) -> SCNNode? {
-        let maxQuads = 35_000
+    /// Depth fill ONLY where mesh is missing — keeps solid surfaces photo-clear.
+    private static func makeDepthFillQuads(
+        _ points: [ColoredDepthPoint],
+        meshPositions: [Float]
+    ) -> SCNNode? {
+        // Occupancy from main mesh (~6cm voxels)
+        var occ = Set<UInt64>()
+        occ.reserveCapacity(max(meshPositions.count / 9, 1))
+        let inv: Float = 16  // 1/0.0625
+        var mi = 0
+        while mi + 2 < meshPositions.count {
+            let x = meshPositions[mi]
+            let y = meshPositions[mi + 1]
+            let z = meshPositions[mi + 2]
+            let key = voxelKey(x, y, z, inv: inv)
+            occ.insert(key)
+            mi += 3
+        }
+
+        let maxQuads = 28_000
         let step = max(1, points.count / maxQuads)
-        let h: Float = 0.028
+        let h: Float = 0.018  // smaller = less muddy
 
         var pos: [Float] = []
         var col: [Float] = []
         var idx: [UInt32] = []
-        let cap = min(points.count / max(step, 1), maxQuads)
-        pos.reserveCapacity(cap * 12)
-        col.reserveCapacity(cap * 16)
-        idx.reserveCapacity(cap * 6)
+        pos.reserveCapacity(12_000)
+        col.reserveCapacity(16_000)
+        idx.reserveCapacity(18_000)
 
         var base: UInt32 = 0
         var n = 0
-        while n < points.count {
+        var kept = 0
+        while n < points.count && kept < maxQuads {
             let p = points[n]
+            n += step
+            // Skip if mesh already covers this spot
+            if occ.contains(voxelKey(p.position.x, p.position.y, p.position.z, inv: inv)) {
+                continue
+            }
+            // Also skip neighbors slightly
+            let k2 = voxelKey(p.position.x + 0.04, p.position.y, p.position.z, inv: inv)
+            if occ.contains(k2) { continue }
+
             let c = p.color
-            let x = p.position.x
-            let y = p.position.y
-            let z = p.position.z
-            // 4 corners of a small world-XZ quad
-            pos.append(contentsOf: [x - h, y, z - h])
-            col.append(contentsOf: [c.x, c.y, c.z, 1])
-            pos.append(contentsOf: [x + h, y, z - h])
-            col.append(contentsOf: [c.x, c.y, c.z, 1])
-            pos.append(contentsOf: [x + h, y, z + h])
-            col.append(contentsOf: [c.x, c.y, c.z, 1])
-            pos.append(contentsOf: [x - h, y, z + h])
-            col.append(contentsOf: [c.x, c.y, c.z, 1])
+            // Mild lift so fill isn't black
+            let cr = max(c.x, 0.08)
+            let cg = max(c.y, 0.08)
+            let cb = max(c.z, 0.08)
+            let x = p.position.x, y = p.position.y, z = p.position.z
+            pos.append(contentsOf: [x - h, y, z - h, x + h, y, z - h, x + h, y, z + h, x - h, y, z + h])
+            for _ in 0..<4 {
+                col.append(contentsOf: [cr, cg, cb, 1])
+            }
             idx.append(contentsOf: [base, base &+ 1, base &+ 2, base, base &+ 2, base &+ 3])
             base &+= 4
-            n += step
+            kept += 1
         }
         guard !pos.isEmpty else { return nil }
 
@@ -406,6 +466,16 @@ enum PhotoTexturedMeshBuilder {
         node.renderingOrder = -1
         return node
     }
+
+    private static func voxelKey(_ x: Float, _ y: Float, _ z: Float, inv: Float) -> UInt64 {
+        let ix = Int32((x * inv).rounded())
+        let iy = Int32((y * inv).rounded())
+        let iz = Int32((z * inv).rounded())
+        return (UInt64(bitPattern: Int64(ix)) & 0x1FFFFF)
+            | ((UInt64(bitPattern: Int64(iy)) & 0x1FFFFF) << 21)
+            | ((UInt64(bitPattern: Int64(iz)) & 0x1FFFFF) << 42)
+    }
+
 
     // MARK: - Fast color (single best frame, limited search)
 
@@ -572,13 +642,14 @@ enum PhotoTexturedMeshBuilder {
             if dist < 0.12 || dist > 4.5 { continue }
             let viewDir = toCam / max(dist, 1e-4)
             let facing = simd_dot(normal, viewDir)
-            if facing < 0.45 { continue }
+            if facing < 0.38 { continue }
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-            if view.z > -0.1 { continue }
+            if view.z > -0.08 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
-            if center < 0.25 { continue }
-            let score = facing * facing * (1 / max(dist, 0.3)) * center
+            if center < 0.18 { continue }
+            // Prefer closer frames (sharper detail)
+            let score = facing * facing * (1 / max(dist, 0.25)) * center * center
             if best == nil || score > best!.score {
                 best = ProjPick(index: i, score: score)
             }
@@ -693,51 +764,42 @@ enum PhotoTexturedMeshBuilder {
         _ c: (UInt8, UInt8, UInt8),
         sceneLuma: Float
     ) -> (UInt8, UInt8, UInt8) {
+        // Keep colors close to the real camera — clarity > heavy filters
         var r = Float(c.0) / 255.0
         var g = Float(c.1) / 255.0
         var bl = Float(c.2) / 255.0
         let y = (r + g + bl) / 3.0
 
-        if sceneLuma < 0.32 || y < 0.28 {
-            let lift: Float = 0.12
+        if sceneLuma < 0.28 || y < 0.22 {
+            let lift: Float = 0.07
             r = min(1.0, r + lift * (1.0 - r))
             g = min(1.0, g + lift * (1.0 - g))
             bl = min(1.0, bl + lift * (1.0 - bl))
-        } else if sceneLuma > 0.72 || y > 0.82 {
+        } else if sceneLuma > 0.78 || y > 0.88 {
             r = softHighlight(r)
             g = softHighlight(g)
             bl = softHighlight(bl)
         }
 
+        // Light clarity only
         let mid = (r + g + bl) / 3.0
-        let contrast: Float = 1.12
+        let contrast: Float = 1.18
         r = clamp01(mid + (r - mid) * contrast)
         g = clamp01(mid + (g - mid) * contrast)
         bl = clamp01(mid + (bl - mid) * contrast)
 
         let avg = (r + g + bl) / 3.0
-        let sat: Float = 1.12
+        let sat: Float = 1.16
         r = clamp01(avg + (r - avg) * sat)
         g = clamp01(avg + (g - avg) * sat)
         bl = clamp01(avg + (bl - avg) * sat)
 
-        // Soft floor so dark areas stay visible but not milky
-        let floor: Float = 0.06
+        let floor: Float = 0.04
         r = max(r, floor)
         g = max(g, floor)
         bl = max(bl, floor)
 
-        // Micro contrast for clearer edges
-        let mid2 = (r + g + bl) / 3.0
-        let sharp: Float = 1.08
-        r = clamp01(mid2 + (r - mid2) * sharp)
-        g = clamp01(mid2 + (g - mid2) * sharp)
-        bl = clamp01(mid2 + (bl - mid2) * sharp)
-
-        let ru = UInt8(r * 255.0)
-        let gu = UInt8(g * 255.0)
-        let bu = UInt8(bl * 255.0)
-        return (ru, gu, bu)
+        return (UInt8(r * 255.0), UInt8(g * 255.0), UInt8(bl * 255.0))
     }
 
     private static func softHighlight(_ v: Float) -> Float {
