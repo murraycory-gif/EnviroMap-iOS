@@ -87,11 +87,15 @@ enum PhotoTexturedMeshBuilder {
         let triBudget = MeshDensityConfig.triangleBudget
         var triUsed = 0
 
-        for (ci, chunk) in chunks.enumerated() {
+        // Process denser (smaller) chunks first so detail objects aren't dropped by budget
+        let ordered = chunks.sorted { $0.positions.count < $1.positions.count }
+
+        for (ci, chunk) in ordered.enumerated() {
             if ci % 3 == 0 {
                 progressHandler?(0.1 + 0.75 * Double(ci) / Double(total), "Painting surfaces…")
             }
-            if triUsed >= triBudget { break }
+            // Soft budget: still include chunk but with heavier step if over
+            let overBudget = triUsed >= triBudget
 
             let vCount = chunk.positions.count
             let triCount = chunk.indices.count / 3
@@ -105,9 +109,11 @@ enum PhotoTexturedMeshBuilder {
             }
 
             // Adaptive step: keep denser mesh for smaller chunks (detail objects)
-            let triStep: Int
-            if triCount > 100_000 { triStep = 2 }
-            else { triStep = 1 }
+            // Keep every triangle possible — holes look worse than denser mesh
+            var triStep = triCount > 150_000 ? 2 : 1
+            if overBudget {
+                triStep = max(triStep, triCount > 20_000 ? 3 : 2)
+            }
 
             var localMap: [Int: UInt32] = [:]
 
@@ -141,7 +147,7 @@ enum PhotoTexturedMeshBuilder {
             }
 
             for ti in stride(from: 0, to: triCount, by: triStep) {
-                if triUsed >= triBudget { break }
+                // Never hard-cut mid-surface (that left big black holes)
                 let i0 = Int(chunk.indices[ti * 3])
                 let i1 = Int(chunk.indices[ti * 3 + 1])
                 let i2 = Int(chunk.indices[ti * 3 + 2])
@@ -264,10 +270,6 @@ enum PhotoTexturedMeshBuilder {
             let v = min(1, max(0, imgNorm.y))
             guard let c = sampleBilinear(kf, u: Float(u), v: Float(v)) else { continue }
 
-            // Skip pure black (shadow holes) and pure white blown highlights if we have alternatives
-            let lum = (Float(c.0) + Float(c.1) + Float(c.2)) / 3
-            if lum < 8 || lum > 250 { continue }
-
             let center = Float((1 - abs(u - 0.5)) * (1 - abs(v - 0.5)))
             let w = Float(facing) * (1.0 / max(dist, 0.25)) * (0.35 + 0.65 * center)
             rSum += Float(c.0) * w
@@ -345,7 +347,7 @@ enum PhotoTexturedMeshBuilder {
         let d = maxC - minC
         if d > 0.02 {
             let s = d / max(1 - abs(2 * l - 1), 0.001)
-            let s2 = min(1, s * 1.35) // +35% sat
+            let s2 = min(1, s * 1.18) // gentle sat
             // Convert back roughly via lerp toward gray
             let gray = l
             let t = s2 / max(s, 0.001)
@@ -355,7 +357,7 @@ enum PhotoTexturedMeshBuilder {
         }
         // Slight contrast
         func contrast(_ x: Float) -> Float {
-            let y = (x - 0.5) * 1.12 + 0.5
+            let y = (x - 0.5) * 1.06 + 0.5
             return min(1, max(0, y))
         }
         return (

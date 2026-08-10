@@ -804,23 +804,27 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // Full-quality pull of EVERY live mesh anchor right before bake
+        // Full-quality pull of EVERY live mesh anchor — fills holes from live subsample
         guard let frame = arView?.session.currentFrame else { return }
         autoreleasepool {
-            // Extra color frame from final pose
             ingestKeyframe(from: frame)
             let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            // Prefer full quality; always overwrite live subsampled tiles
+
+            // Merge full-quality over live tiles (same id overwrites thin copies)
+            var upgraded = 0
             for mesh in meshes {
                 if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
                     stateLock.lock()
                     chunks[chunk.id] = chunk
                     stateLock.unlock()
+                    upgraded += 1
                 }
             }
-            // If still empty, fall back to light copies rather than fail
+
+            // Second pass light if first produced nothing
             stateLock.lock()
             let empty = chunks.isEmpty
+            let total = chunks.count
             stateLock.unlock()
             if empty {
                 for mesh in meshes {
@@ -831,6 +835,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                     }
                 }
             }
+            print("[EnviroMap] harvest upgraded=\(upgraded) totalChunks=\(total) anchors=\(meshes.count)")
         }
     }
 
@@ -986,9 +991,17 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         guard isRunning else { return }
         let t = frame.timestamp
 
-        // One heavy job per tick max — mesh OR color, never both (smooth as silk)
-        let needMesh = t - lastMeshCopyTime >= MeshDensityConfig.meshCopyInterval
-        let needKF = t - lastKeyframeTime >= MeshDensityConfig.keyframeInterval
+        stateLock.lock()
+        let n = chunks.count
+        stateLock.unlock()
+
+        // Adaptive: slow down as mesh grows so 100+ surfaces stay smooth
+        let meshI = MeshDensityConfig.meshCopyInterval(chunkCount: n)
+        let kfI = MeshDensityConfig.keyframeInterval(chunkCount: n)
+
+        // One heavy job per tick max — mesh OR color
+        let needMesh = t - lastMeshCopyTime >= meshI
+        let needKF = t - lastKeyframeTime >= kfI
 
         if needMesh {
             lastMeshCopyTime = t
@@ -1050,18 +1063,16 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
         // AI tips based on coverage progress + classification mix
-        if meshCount < 8 {
+        if meshCount < 10 {
             latestAITip = "Keep moving — map floors first"
-        } else if meshCount < 25 {
-            latestAITip = "Circle the car / objects fully"
-        } else if meshCount < 50 {
-            latestAITip = "Hit every side + roof/top"
-        } else if meshCount < 80 {
-            latestAITip = "Fill holes — slow pass gaps"
-        } else if classCounts["floor", default: 0] < 2 {
-            latestAITip = "Sweep the floor under things"
+        } else if meshCount < 35 {
+            latestAITip = "Circle every side of objects"
+        } else if meshCount < 70 {
+            latestAITip = "Fill gaps · then Finish Scan"
+        } else if meshCount < 100 {
+            latestAITip = "Great coverage — Finish when ready"
         } else {
-            latestAITip = "Strong coverage — Done when ready"
+            latestAITip = "Plenty of mesh — Finish Scan now"
         }
     }
 
