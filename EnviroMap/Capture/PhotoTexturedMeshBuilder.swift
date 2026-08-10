@@ -34,8 +34,12 @@ enum PhotoTexturedMeshBuilder {
     /// Hard ceiling so bake never hangs on phone
     private static let bakeDeadlineSeconds: CFTimeInterval = 28
 
-    static func makeScene(chunks: [CapturedMeshChunk], keyframes: [Keyframe]) -> SCNScene? {
-        buildScene(chunks: chunks, keyframes: keyframes)
+    static func makeScene(
+        chunks: [CapturedMeshChunk],
+        keyframes: [Keyframe],
+        depthPoints: [ColoredDepthPoint] = []
+    ) -> SCNScene? {
+        buildScene(chunks: chunks, keyframes: keyframes, depthPoints: depthPoints)
     }
 
     static func writeScene(_ scene: SCNScene, to directory: URL, name: String = "room_full.scn") -> String? {
@@ -49,9 +53,10 @@ enum PhotoTexturedMeshBuilder {
     static func buildAndExport(
         chunks: [CapturedMeshChunk],
         keyframes: [Keyframe],
+        depthPoints: [ColoredDepthPoint] = [],
         to directory: URL
     ) -> BuildResult? {
-        guard let scene = buildScene(chunks: chunks, keyframes: keyframes) else { return nil }
+        guard let scene = buildScene(chunks: chunks, keyframes: keyframes, depthPoints: depthPoints) else { return nil }
         let name = writeScene(scene, to: directory) ?? "room_full.scn"
         return BuildResult(scene: scene, fileName: name)
     }
@@ -69,9 +74,10 @@ enum PhotoTexturedMeshBuilder {
 
     private static func buildScene(
         chunks: [CapturedMeshChunk],
-        keyframes: [Keyframe]
+        keyframes: [Keyframe],
+        depthPoints: [ColoredDepthPoint] = []
     ) -> SCNScene? {
-        guard !chunks.isEmpty else { return nil }
+        guard !chunks.isEmpty || !depthPoints.isEmpty else { return nil }
         let t0 = CACurrentMediaTime()
         func timedOut() -> Bool { CACurrentMediaTime() - t0 > bakeDeadlineSeconds }
 
@@ -298,6 +304,14 @@ enum PhotoTexturedMeshBuilder {
             root.addChildNode(node)
         }
 
+        // Depth hole-fill points (fills black gaps mesh missed)
+        if !depthPoints.isEmpty {
+            progressHandler?(0.9, "Filling Gaps…")
+            if let fillNode = makeDepthFillNode(depthPoints) {
+                root.addChildNode(fillNode)
+            }
+        }
+
         guard !root.childNodes.isEmpty else {
             progressHandler?(1, "No Mesh")
             return nil
@@ -315,8 +329,67 @@ enum PhotoTexturedMeshBuilder {
         normalizeForPreview(scene)
         progressHandler?(1.0, "Ready")
         let dt = CACurrentMediaTime() - t0
-        print("[EnviroMap] fast hybrid \(String(format: "%.1f", dt))s tex=\(texTris) vc=\(vcTris) kfs=\(kfs.count)")
+        print("[EnviroMap] hybrid \(String(format: "%.1f", dt))s tex=\(texTris) vc=\(vcTris) depth=\(depthPoints.count) kfs=\(kfs.count)")
         return scene
+    }
+
+
+    /// Dense colored points that visually fill mesh holes (cars, dark paint, etc.)
+    private static func makeDepthFillNode(_ points: [ColoredDepthPoint]) -> SCNNode? {
+        let maxPts = 90_000
+        let step = max(1, points.count / maxPts)
+        var pos: [Float] = []
+        var col: [Float] = []
+        var idx: [UInt32] = []
+        pos.reserveCapacity(min(points.count, maxPts) * 3)
+        col.reserveCapacity(min(points.count, maxPts) * 4)
+
+        var i: UInt32 = 0
+        var n = 0
+        while n < points.count {
+            let p = points[n]
+            pos.append(contentsOf: [p.position.x, p.position.y, p.position.z])
+            col.append(contentsOf: [p.color.x, p.color.y, p.color.z, 1])
+            idx.append(i)
+            i += 1
+            n += step
+        }
+        guard !pos.isEmpty else { return nil }
+
+        let posData = pos.withUnsafeBufferPointer { Data(buffer: $0) }
+        let colData = col.withUnsafeBufferPointer { Data(buffer: $0) }
+        let idxData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
+        let sources = [
+            SCNGeometrySource(
+                data: posData, semantic: .vertex, vectorCount: pos.count / 3,
+                usesFloatComponents: true, componentsPerVector: 3,
+                bytesPerComponent: 4, dataOffset: 0, dataStride: 12
+            ),
+            SCNGeometrySource(
+                data: colData, semantic: .color, vectorCount: col.count / 4,
+                usesFloatComponents: true, componentsPerVector: 4,
+                bytesPerComponent: 4, dataOffset: 0, dataStride: 16
+            ),
+        ]
+        let element = SCNGeometryElement(
+            data: idxData, primitiveType: .point,
+            primitiveCount: idx.count, bytesPerIndex: 4
+        )
+        element.pointSize = 8
+        element.minimumPointScreenSpaceRadius = 2
+        element.maximumPointScreenSpaceRadius = 10
+
+        let geom = SCNGeometry(sources: sources, elements: [element])
+        let mat = SCNMaterial()
+        mat.lightingModel = .constant
+        mat.isDoubleSided = true
+        mat.diffuse.contents = UIColor.white
+        mat.locksAmbientWithDiffuse = true
+        geom.materials = [mat]
+
+        let node = SCNNode(geometry: geom)
+        node.name = "depthFill"
+        return node
     }
 
     // MARK: - Fast color (single best frame, limited search)

@@ -703,6 +703,12 @@ struct CapturedMeshChunk {
     let indices: [UInt32]
 }
 
+/// Colored LiDAR/scene-depth samples used to fill holes in the mesh
+struct ColoredDepthPoint {
+    let position: SIMD3<Float>
+    let color: SIMD3<Float> // 0...1 RGB
+}
+
 // MARK: - ARKit controller (stable long scans)
 
 final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessionDelegate {
@@ -714,8 +720,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     /// Copied geometry only — never keep live ARMeshAnchor refs long-term
     private var chunks: [UUID: CapturedMeshChunk] = [:]
     private var keyframes: [PhotoTexturedMeshBuilder.Keyframe] = []
+    /// Scene-depth color points (hole fill)
+    private var depthPoints: [UInt64: ColoredDepthPoint] = [:]
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
+    private var lastDepthTime: TimeInterval = 0
     private var lastCamPos: SIMD3<Float>?
     private var lastStatsEmit: TimeInterval = 0
     private var maxKeyframes: Int { MeshDensityConfig.maxKeyframes }
@@ -776,8 +785,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         stateLock.lock()
         chunks.removeAll()
         keyframes.removeAll()
+        depthPoints.removeAll()
         lastKeyframeTime = 0
         lastMeshCopyTime = 0
+        lastDepthTime = 0
         lastStatsEmit = 0
         lastMarkerUpdate = 0
         classCounts.removeAll()
@@ -818,13 +829,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // Dense multi-pass harvest — keep densest version of every tile
         guard let session = arView?.session else { return }
 
         func pull(from frame: ARFrame) -> [UUID: CapturedMeshChunk] {
             var fresh: [UUID: CapturedMeshChunk] = [:]
-            let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            for mesh in meshes {
+            for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
                 if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
                     fresh[chunk.id] = chunk
                 }
@@ -834,7 +843,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         func merge(_ into: inout [UUID: CapturedMeshChunk], _ extra: [UUID: CapturedMeshChunk]) {
             for (id, chunk) in extra {
-                if let old = into[id], old.positions.count >= chunk.positions.count,
+                if let old = into[id],
+                   old.positions.count >= chunk.positions.count,
                    old.indices.count >= chunk.indices.count {
                     continue
                 }
@@ -843,25 +853,27 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         autoreleasepool {
-            // Pass 1 — immediate
-            var all: [UUID: CapturedMeshChunk] = [:]
-            if let frame = session.currentFrame {
-                ingestKeyframe(from: frame)
-                all = pull(from: frame)
-            }
+            // Start from densest bank collected during the walk
+            stateLock.lock()
+            var all = chunks
+            stateLock.unlock()
 
-            // Pass 2 — ARKit densifies when still
-            Thread.sleep(forTimeInterval: 0.22)
             if let frame = session.currentFrame {
                 ingestKeyframe(from: frame)
                 merge(&all, pull(from: frame))
+                ingestDepthPoints(from: frame) // final dense depth
             }
-
-            // Pass 3 — catch late tiles (cars, far walls)
-            Thread.sleep(forTimeInterval: 0.18)
+            Thread.sleep(forTimeInterval: 0.2)
             if let frame = session.currentFrame {
                 ingestKeyframe(from: frame)
                 merge(&all, pull(from: frame))
+                ingestDepthPoints(from: frame)
+            }
+            Thread.sleep(forTimeInterval: 0.2)
+            if let frame = session.currentFrame {
+                ingestKeyframe(from: frame)
+                merge(&all, pull(from: frame))
+                ingestDepthPoints(from: frame)
             }
 
             stateLock.lock()
@@ -869,8 +881,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             let total = chunks.count
             let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
             let faces = chunks.values.reduce(0) { $0 + $1.indices.count / 3 }
+            let dps = depthPoints.count
             stateLock.unlock()
-            print("[EnviroMap] DENSE HARVEST chunks=\(total) verts=\(verts) faces=\(faces)")
+            print("[EnviroMap] DENSE+BANK harvest chunks=\(total) verts=\(verts) faces=\(faces) depthPts=\(dps)")
         }
     }
 
@@ -879,17 +892,20 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         stateLock.lock()
         let meshChunks = Array(chunks.values)
         let frames = keyframes
+        let points = Array(depthPoints.values)
         stateLock.unlock()
 
-        guard !meshChunks.isEmpty else { return nil }
+        guard !meshChunks.isEmpty || !points.isEmpty else { return nil }
 
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("EnviroMapFull_\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        // Build photo-textured scene once (writes tex_*.jpg into tmp when dir provided via export)
-        // Fast path: makeScene without writing files; textures stay in memory for Review
-        guard let scene = PhotoTexturedMeshBuilder.makeScene(chunks: meshChunks, keyframes: frames) else {
+        guard let scene = PhotoTexturedMeshBuilder.makeScene(
+            chunks: meshChunks,
+            keyframes: frames,
+            depthPoints: points
+        ) else {
             return nil
         }
         PhotoTexturedMeshBuilder.normalizeForPreview(scene)
@@ -1029,10 +1045,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         guard isRunning else { return }
         let ts = frame.timestamp
 
-        // FIRST PRINCIPLES: do NOT copy mesh geometry while walking.
-        // Live mesh copies steal CPU from ARKit → sparse holes when you walk normal speed.
-        // ARKit builds the dense mesh; we harvest everything once on Finish.
-
         let liveMeshCount = frame.anchors.compactMap { $0 as? ARMeshAnchor }.count
 
         let pos = SIMD3<Float>(
@@ -1046,19 +1058,42 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         lastCamPos = pos
 
-        // Color frames only — cheap, lets you walk at normal pace
+        // Color frames — more often while moving
         let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
         if ts - lastKeyframeTime >= kfI {
             lastKeyframeTime = ts
             autoreleasepool { ingestKeyframe(from: frame) }
         }
 
-        // Progress from ARKit's live mesh count (not our stored copies)
+        // DENSEST-MESH bank: every ~0.55s keep denser copy of each tile
+        // (low rate = no freeze, high coverage vs finish-only harvest)
+        if ts - lastMeshCopyTime >= 0.55 {
+            lastMeshCopyTime = ts
+            let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+            if !meshes.isEmpty {
+                captureQueue.async { [weak self] in
+                    self?.accumulateDensest(meshes)
+                }
+            }
+        }
+
+        // Scene-depth color points fill holes LiDAR mesh misses (cars, dark paint)
+        if ts - lastDepthTime >= 0.28 {
+            lastDepthTime = ts
+            captureQueue.async { [weak self] in
+                self?.ingestDepthPoints(from: frame)
+            }
+        }
+
         if ts - lastStatsEmit >= 0.35 {
             stateLock.lock()
+            let stored = chunks.count
             let fn = keyframes.count
+            let dp = depthPoints.count
             stateLock.unlock()
-            emitStats(meshCount: max(liveMeshCount, 1), frameCount: fn)
+            // Progress uses max(live, stored) so bank growth shows up
+            emitStats(meshCount: max(liveMeshCount, stored, 1), frameCount: fn)
+            _ = dp
         }
     }
 
@@ -1212,6 +1247,146 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             classCounts["wall", default: 0] += 1
         }
         _ = g
+    }
+
+
+    /// Keep densest version of each mesh tile seen during the walk
+    private func accumulateDensest(_ meshes: [ARMeshAnchor]) {
+        guard !meshes.isEmpty else { return }
+        var updates: [UUID: CapturedMeshChunk] = [:]
+        for mesh in meshes {
+            guard let chunk = Self.copyChunk(from: mesh, fullQuality: true) else { continue }
+            updates[chunk.id] = chunk
+        }
+        guard !updates.isEmpty else { return }
+        stateLock.lock()
+        for (id, chunk) in updates {
+            if let old = chunks[id],
+               old.positions.count >= chunk.positions.count,
+               old.indices.count >= chunk.indices.count {
+                continue
+            }
+            chunks[id] = chunk
+        }
+        // Soft cap by dropping smallest tiles if huge
+        if chunks.count > maxChunks {
+            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
+            var keep: [UUID: CapturedMeshChunk] = [:]
+            for c in ranked.prefix(maxChunks) { keep[c.id] = c }
+            chunks = keep
+        }
+        stateLock.unlock()
+    }
+
+    /// Sample scene depth + camera color into a voxel grid (fills mesh holes)
+    private func ingestDepthPoints(from frame: ARFrame) {
+        guard let depthMap = frame.sceneDepth?.depthMap else { return }
+        let cam = frame.camera
+        let orientation = arView?.window?.windowScene?.interfaceOrientation ?? .portrait
+        let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        let dw = CVPixelBufferGetWidth(depthMap)
+        let dh = CVPixelBufferGetHeight(depthMap)
+        guard dw > 8, dh > 8,
+              let dBase = CVPixelBufferGetBaseAddress(depthMap) else { return }
+        let dStride = CVPixelBufferGetBytesPerRow(depthMap)
+
+        // Sparse sample for speed/memory (~every 6th pixel)
+        let step = 6
+        var local: [UInt64: ColoredDepthPoint] = [:]
+        local.reserveCapacity((dw / step) * (dh / step) / 2)
+
+        // Reuse current camera RGB via a cheap keyframe extract
+        guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
+            from: frame, orientation: orientation, viewport: viewport, maxWidth: 480
+        ) else { return }
+
+        // Unproject using camera intrinsics of depth resolution
+        let intrinsics = cam.intrinsics
+        // Scale intrinsics from camera image to depth map size
+        let imgW = CVPixelBufferGetWidth(frame.capturedImage)
+        let imgH = CVPixelBufferGetHeight(frame.capturedImage)
+        let sx = Float(dw) / Float(max(imgW, 1))
+        let sy = Float(dh) / Float(max(imgH, 1))
+        let fx = intrinsics[0, 0] * sx
+        let fy = intrinsics[1, 1] * sy
+        let cx = intrinsics[2, 0] * sx
+        let cy = intrinsics[2, 1] * sy
+
+        let camPos = SIMD3<Float>(
+            cam.transform.columns.3.x,
+            cam.transform.columns.3.y,
+            cam.transform.columns.3.z
+        )
+
+        for v in stride(from: 0, to: dh, by: step) {
+            for u in stride(from: 0, to: dw, by: step) {
+                let depth = dBase.advanced(by: v * dStride + u * MemoryLayout<Float32>.size)
+                    .assumingMemoryBound(to: Float32.self).pointee
+                if !depth.isFinite || depth < 0.15 || depth > 5.5 { continue }
+
+                // Unproject depth pixel into camera space then world
+                let x = (Float(u) - cx) * depth / max(fx, 1e-4)
+                let y = (Float(v) - cy) * depth / max(fy, 1e-4)
+                // ARKit: camera looks along -Z; Y often flipped vs depth map v
+                let camSpace = SIMD4<Float>(x, -y, -depth, 1)
+                let world4 = cam.transform * camSpace
+                let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+
+                // Color from keyframe projection
+                let projected = cam.projectPoint(world, orientation: orientation, viewportSize: viewport)
+                let vpW = max(viewport.width, 1)
+                let vpH = max(viewport.height, 1)
+                let vpNorm = CGPoint(x: projected.x / vpW, y: projected.y / vpH)
+                let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
+                guard imgNorm.x >= 0, imgNorm.x <= 1, imgNorm.y >= 0, imgNorm.y <= 1 else { continue }
+                let px = min(max(Int(Float(imgNorm.x) * Float(kf.rgbWidth - 1)), 0), kf.rgbWidth - 1)
+                let py = min(max(Int(Float(imgNorm.y) * Float(kf.rgbHeight - 1)), 0), kf.rgbHeight - 1)
+                let o = (py * kf.rgbWidth + px) * 3
+                guard o + 2 < kf.rgb.count else { continue }
+                let col = SIMD3<Float>(
+                    Float(kf.rgb[o]) / 255,
+                    Float(kf.rgb[o + 1]) / 255,
+                    Float(kf.rgb[o + 2]) / 255
+                )
+
+                // Voxel key ~3cm
+                let vx = Int32((world.x * 33).rounded())
+                let vy = Int32((world.y * 33).rounded())
+                let vz = Int32((world.z * 33).rounded())
+                let key = (UInt64(bitPattern: Int64(vx)) & 0x1FFFFF)
+                    | ((UInt64(bitPattern: Int64(vy)) & 0x1FFFFF) << 21)
+                    | ((UInt64(bitPattern: Int64(vz)) & 0x1FFFFF) << 42)
+                // Prefer closer samples
+                if let existing = local[key] {
+                    let dOld = simd_length(existing.position - camPos)
+                    let dNew = simd_length(world - camPos)
+                    if dNew >= dOld { continue }
+                }
+                local[key] = ColoredDepthPoint(position: world, color: col)
+            }
+        }
+
+        guard !local.isEmpty else { return }
+        stateLock.lock()
+        for (k, p) in local {
+            depthPoints[k] = p
+        }
+        // Cap memory ~120k points
+        if depthPoints.count > 120_000 {
+            // Drop random half of oldest by rebuilding from suffix of keys
+            let keys = Array(depthPoints.keys)
+            var keep: [UInt64: ColoredDepthPoint] = [:]
+            keep.reserveCapacity(80_000)
+            for k in keys.suffix(80_000) {
+                if let p = depthPoints[k] { keep[k] = p }
+            }
+            depthPoints = keep
+        }
+        stateLock.unlock()
     }
 
     private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false) -> CapturedMeshChunk? {

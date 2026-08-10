@@ -12,7 +12,7 @@ enum MeshDensityConfig {
     }
 
     static var maxKeyframes: Int { 96 }
-    static var maxChunks: Int { 5000 }
+    static var maxChunks: Int { 6000 }
     /// Higher = sharper paint detail
     static var keyframeMaxWidth: Int { 800 }
 
