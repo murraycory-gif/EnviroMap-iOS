@@ -228,78 +228,17 @@ struct MeshSceneView: UIViewRepresentable {
                         .createNormalsIfAbsent: true,
                     ])
 
-                    // Lambert + lights so shape is readable
-                    scene.rootNode.enumerateChildNodes { node, _ in
-                        guard let geos = node.geometry else { return }
-                        for mat in geos.materials {
-                            mat.lightingModel = .constant
-                            mat.fillMode = .fill
-                            mat.isDoubleSided = true
-                            mat.shaderModifiers = [:]
-                        }
-                    }
-                    if scene.rootNode.childNode(withName: "keyLight", recursively: false) == nil {
-                        let key = SCNNode()
-                        key.name = "keyLight"
-                        key.light = SCNLight()
-                        key.light?.type = .directional
-                        key.light?.intensity = 650
-                        key.eulerAngles = SCNVector3(Float(-0.65), Float(0.45), Float(0))
-                        scene.rootNode.addChildNode(key)
-                        let amb = SCNNode()
-                        amb.light = SCNLight()
-                        amb.light?.type = .ambient
-                        amb.light?.intensity = 550
-                        scene.rootNode.addChildNode(amb)
-                    }
-
-                    // Soft ground only when not already a dense floor mesh
-                    let floor = SCNFloor()
-                    floor.reflectivity = 0.04
-                    floor.firstMaterial?.diffuse.contents = UIColor(white: 0.12, alpha: 1)
-                    floor.firstMaterial?.lightingModel = .physicallyBased
-                    let floorNode = SCNNode(geometry: floor)
-                    floorNode.position.y = -0.02
-                    floorNode.name = "preview-floor"
-                    scene.rootNode.addChildNode(floorNode)
-
-                    if scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).isEmpty {
-                        let cam = SCNNode()
-                        cam.camera = SCNCamera()
-                        cam.camera?.fieldOfView = 55
-                        cam.camera?.wantsHDR = true
-                        cam.position = SCNVector3(3.5, 2.4, 5.5)
-                        cam.eulerAngles = SCNVector3(Float(-0.35), Float(0.55), Float(0))
-                        scene.rootNode.addChildNode(cam)
-                    }
-
-                    // Brighter, multi-light setup so room colors read as real
-                    let key = SCNNode()
-                    key.light = SCNLight()
-                    key.light?.type = .directional
-                    key.light?.intensity = 1000
-                    key.light?.color = UIColor(white: 1.0, alpha: 1)
-                    key.eulerAngles = SCNVector3(-0.85, 0.45, 0)
-                    scene.rootNode.addChildNode(key)
-
-                    let fill = SCNNode()
-                    fill.light = SCNLight()
-                    fill.light?.type = .directional
-                    fill.light?.intensity = 450
-                    fill.eulerAngles = SCNVector3(-0.3, -0.9, 0)
-                    scene.rootNode.addChildNode(fill)
-
-                    let ambient = SCNNode()
-                    ambient.light = SCNLight()
-                    ambient.light?.type = .ambient
-                    ambient.light?.intensity = 500
-                    ambient.light?.color = UIColor(white: 0.95, alpha: 1)
-                    scene.rootNode.addChildNode(ambient)
+                    // Center + camera so mesh is always visible with real colors
+                    PhotoTexturedMeshBuilder.normalizeForPreview(scene)
 
                     DispatchQueue.main.async { [weak self] in
                         guard let scnView = self?.view else { return }
                         scnView.scene = scene
-                        scnView.pointOfView = scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).first
+                        scnView.pointOfView = scene.rootNode.childNode(withName: "previewCam", recursively: true)
+                            ?? scene.rootNode.childNodes(passingTest: { n, _ in n.camera != nil }).first
+                        scnView.defaultCameraController.target = SCNVector3Zero
+                        scnView.autoenablesDefaultLighting = true
+                        scnView.allowsCameraControl = true
                         // Default camera control target
                         scnView.defaultCameraController.automaticTarget = true
                         scnView.defaultCameraController.inertiaEnabled = true

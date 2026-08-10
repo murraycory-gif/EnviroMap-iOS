@@ -42,7 +42,99 @@ enum PhotoTexturedMeshBuilder {
         return nil
     }
 
-    static func buildAndExport(
+    
+    /// Centers mesh at origin and installs a reliable orbit camera (fixes black Review).
+    static func normalizeForPreview(_ scene: SCNScene) {
+        let mesh = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
+
+        // Compute world bounds from geometry
+        var minV = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+        var maxV = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+        var found = false
+        func visit(_ node: SCNNode) {
+            if let g = node.geometry {
+                let (bmin, bmax) = g.boundingBox
+                for sx: Float in [0, 1] {
+                    for sy: Float in [0, 1] {
+                        for sz: Float in [0, 1] {
+                            let lx = bmin.x + (bmax.x - bmin.x) * sx
+                            let ly = bmin.y + (bmax.y - bmin.y) * sy
+                            let lz = bmin.z + (bmax.z - bmin.z) * sz
+                            let w = node.convertPosition(SCNVector3(lx, ly, lz), to: scene.rootNode)
+                            minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
+                            maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
+                            found = true
+                        }
+                    }
+                }
+            }
+            for c in node.childNodes { visit(c) }
+        }
+        visit(mesh)
+        guard found else { return }
+
+        let center = (minV + maxV) * 0.5
+        let extent = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z))
+        let safeExtent = max(extent, 0.5)
+
+        // Shift mesh so center is origin
+        if let colored = scene.rootNode.childNode(withName: "coloredMesh", recursively: false) {
+            colored.position = SCNVector3(-center.x, -center.y, -center.z)
+        } else {
+            mesh.position = SCNVector3(
+                mesh.position.x - center.x,
+                mesh.position.y - center.y,
+                mesh.position.z - center.z
+            )
+        }
+
+        // Remove prior cameras
+        scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
+
+        let dist = safeExtent * 2.2
+        let cam = SCNNode()
+        cam.name = "previewCam"
+        cam.camera = SCNCamera()
+        cam.camera?.fieldOfView = 55
+        cam.camera?.zNear = 0.01
+        cam.camera?.zFar = max(200, Double(safeExtent * 40))
+        // Classic 3/4 view — always frames origin-centered mesh
+        cam.position = SCNVector3(dist * 0.55, dist * 0.4, dist * 0.95)
+        cam.look(at: SCNVector3(0, 0, 0))
+        scene.rootNode.addChildNode(cam)
+
+        // Ensure ambient light
+        if scene.rootNode.childNode(withName: "viewerAmbient", recursively: false) == nil {
+            let amb = SCNNode()
+            amb.name = "viewerAmbient"
+            amb.light = SCNLight()
+            amb.light?.type = .ambient
+            amb.light?.intensity = 1400
+            amb.light?.color = UIColor.white
+            scene.rootNode.addChildNode(amb)
+        }
+
+        scene.background.contents = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
+
+        // Force solid fill materials
+        func paint(_ node: SCNNode) {
+            if let mats = node.geometry?.materials {
+                for m in mats {
+                    m.lightingModel = .constant
+                    m.isDoubleSided = true
+                    m.fillMode = .fill
+                    if m.diffuse.contents == nil {
+                        m.diffuse.contents = UIColor(white: 0.75, alpha: 1)
+                    }
+                }
+            }
+            for c in node.childNodes { paint(c) }
+        }
+        paint(scene.rootNode)
+    }
+
+
+static func buildAndExport(
         chunks: [CapturedMeshChunk],
         keyframes: [Keyframe],
         to directory: URL
@@ -218,6 +310,8 @@ enum PhotoTexturedMeshBuilder {
         cam.eulerAngles = SCNVector3(Float(-0.3), Float(0.4), Float(0))
         scene.rootNode.addChildNode(cam)
 
+        progressHandler?(0.95, "Framing view…")
+        normalizeForPreview(scene)
         progressHandler?(1.0, "Ready")
         return scene
     }

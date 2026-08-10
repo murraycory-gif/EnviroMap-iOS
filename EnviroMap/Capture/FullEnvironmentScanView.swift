@@ -487,25 +487,38 @@ struct FullEnvironmentScanView: View {
             return
         }
         model.phase = .saving
-        let scnURL = payload.directory.appendingPathComponent(payload.fileName)
-        if !FileManager.default.fileExists(atPath: scnURL.path), let scene = payload.scene {
-            _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
-        }
-        do {
-            _ = try store.saveFullEnvironment(
-                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                notes: "Full environment LiDAR + photo color",
-                meshFileName: payload.fileName,
-                sourceDirectory: payload.directory,
-                preview: model.previewImage,
-                meshChunkCount: model.meshChunks
-            )
-            didSave = true
-            model.stop()
-            dismiss()
-        } catch {
-            model.phase = .preview
-            saveError = error.localizedDescription
+        let nm = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let preview = model.previewImage
+        let chunks = model.meshChunks
+        let storeRef = store
+        let ctrl = model.controller
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scnURL = payload.directory.appendingPathComponent(payload.fileName)
+            if !FileManager.default.fileExists(atPath: scnURL.path), let scene = payload.scene {
+                PhotoTexturedMeshBuilder.normalizeForPreview(scene)
+                _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
+            }
+            do {
+                _ = try storeRef.saveFullEnvironment(
+                    name: nm,
+                    notes: "Full environment LiDAR + photo color",
+                    meshFileName: payload.fileName,
+                    sourceDirectory: payload.directory,
+                    preview: preview,
+                    meshChunkCount: chunks
+                )
+                DispatchQueue.main.async {
+                    self.didSave = true
+                    ctrl.stop()
+                    self.dismiss()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.model.phase = .preview
+                    self.saveError = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -629,83 +642,23 @@ struct PreviewMeshView: UIViewRepresentable {
         var lastReset: Int = -1
 
         func fitCamera(in view: SCNView, scene: SCNScene) {
-            let target = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
+            PhotoTexturedMeshBuilder.normalizeForPreview(scene)
 
-            // Prefer geometry-computed bounds (more reliable than empty bbox)
-            var minV = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
-            var maxV = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
-            var found = false
-            target.enumerateChildNodes { node, _ in
-                guard let g = node.geometry else { return }
-                let (bmin, bmax) = g.boundingBox
-                let corners = [
-                    SCNVector3(bmin.x, bmin.y, bmin.z),
-                    SCNVector3(bmax.x, bmin.y, bmin.z),
-                    SCNVector3(bmin.x, bmax.y, bmin.z),
-                    SCNVector3(bmin.x, bmin.y, bmax.z),
-                    SCNVector3(bmax.x, bmax.y, bmax.z),
-                ]
-                for c in corners {
-                    let w = node.convertPosition(c, to: scene.rootNode)
-                    minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
-                    maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
-                    found = true
-                }
+            if let cam = scene.rootNode.childNode(withName: "previewCam", recursively: true) {
+                view.pointOfView = cam
+                view.defaultCameraController.pointOfView = cam
+                view.defaultCameraController.target = SCNVector3Zero
             }
-
-            let center: SCNVector3
-            var radius: Float = 1.5
-            if found && (maxV.x - minV.x).isFinite {
-                center = SCNVector3(
-                    (minV.x + maxV.x) * 0.5,
-                    (minV.y + maxV.y) * 0.5,
-                    (minV.z + maxV.z) * 0.5
-                )
-                radius = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z)) * 0.55
-                radius = max(radius, 0.4)
-            } else {
-                let (minB, maxB) = target.boundingBox
-                center = SCNVector3(
-                    (minB.x + maxB.x) * 0.5,
-                    (minB.y + maxB.y) * 0.5,
-                    (minB.z + maxB.z) * 0.5
-                )
-                radius = max(maxB.x - minB.x, max(maxB.y - minB.y, maxB.z - minB.z)) * 0.55
-                radius = max(radius, 0.4)
-            }
-
-            let dist = radius * 2.6
-
-            // Remove old cameras
-            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
-
-            let cam = SCNNode()
-            cam.name = "previewCam"
-            cam.camera = SCNCamera()
-            cam.camera?.fieldOfView = 55
-            cam.camera?.zNear = 0.01
-            cam.camera?.zFar = 500
-            cam.position = SCNVector3(
-                center.x + dist * 0.55,
-                center.y + dist * 0.35,
-                center.z + dist * 0.9
-            )
-            // Aim at center
-            let dx = center.x - cam.position.x
-            let dy = center.y - cam.position.y
-            let dz = center.z - cam.position.z
-            let yaw = atan2(dx, dz)
-            let pitch = -atan2(dy, sqrt(dx * dx + dz * dz))
-            cam.eulerAngles = SCNVector3(pitch, yaw, 0)
-
-            scene.rootNode.addChildNode(cam)
-            view.pointOfView = cam
-            view.defaultCameraController.target = center
-            view.defaultCameraController.pointOfView = cam
+            view.allowsCameraControl = true
+            view.autoenablesDefaultLighting = true
+            view.isPlaying = true
+            view.rendersContinuously = true
+            // Force redraw after layout
+            view.setNeedsDisplay()
+            view.layoutIfNeeded()
         }
     }
 }
-
 
 // MARK: - Model
 
@@ -807,6 +760,7 @@ final class FullEnvironmentScanModel: ObservableObject {
                     self.exportPayload = result
                     self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
                     self.previewScene = scene
+                    self.viewResetToken += 1
                     self.bakeProgress = 1
                     self.bakeStatus = "Ready"
                     self.phase = .preview
@@ -977,25 +931,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     /// Full export with texture files + scn (background after Review appears).
     func persistExportInBackground(_ payload: FullEnvironmentScanModel.ExportPayload) {
-        stateLock.lock()
-        let meshChunks = Array(chunks.values)
-        let frames = keyframes
-        stateLock.unlock()
-        let dir = payload.directory
+        // Scene already written in buildExportFast — never re-bake (was causing freezes).
+        let scn = payload.directory.appendingPathComponent(payload.fileName)
+        if FileManager.default.fileExists(atPath: scn.path) { return }
+        guard let scene = payload.scene else { return }
         DispatchQueue.global(qos: .utility).async {
-            // Rebuild with textureDir so jpg textures are saved next to scn
-            if let built = PhotoTexturedMeshBuilder.buildAndExport(
-                chunks: meshChunks,
-                keyframes: frames,
-                to: dir
-            ) {
-                _ = built
-            } else if let scene = payload.scene {
-                _ = PhotoTexturedMeshBuilder.writeScene(scene, to: dir)
-            }
+            _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
         }
     }
-
 
     // MARK: - Live blue mesh (throttled — better coverage feedback)
 
