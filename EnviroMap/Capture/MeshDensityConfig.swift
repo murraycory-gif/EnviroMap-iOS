@@ -12,7 +12,7 @@ enum MeshDensityConfig {
 
     static var maxKeyframes: Int { 80 }
     static var maxChunks: Int { 4000 }
-    static var keyframeMaxWidth: Int { 880 }
+    static var keyframeMaxWidth: Int { 640 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }
     static var meshCopyInterval: TimeInterval { 999 }
@@ -22,8 +22,8 @@ enum MeshDensityConfig {
     static func liveFaceStep(faceCount: Int) -> Int { 1 }
 
     static var finalVertexSoftCap: Int { 1_200_000 }
-    static var triangleBudget: Int { highDetail ? 700_000 : 400_000 }
-    static var bakeKeyframeLimit: Int { 64 }
+    static var triangleBudget: Int { highDetail ? 280_000 : 180_000 }
+    static var bakeKeyframeLimit: Int { 28 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 

@@ -5,10 +5,10 @@ import UIKit
 import simd
 import CoreVideo
 
-/// Hybrid bake (best of both worlds):
-/// 1) Photo UV texture when projection is clean (sharp detail like 3D Snap)
-/// 2) Vertex color when UV would warp (stable look like 0810-J)
-/// 3) "AI fill" — multi-view consensus + neighbor flood for holes / missing color
+/// Fast hybrid bake:
+/// - Vertex colors (stable, like 0810-J)
+/// - Photo texture ONLY on high-quality projections (no warp)
+/// - Light AI fill with hard time budget (never freeze at 78%)
 enum PhotoTexturedMeshBuilder {
 
     struct Keyframe {
@@ -30,6 +30,9 @@ enum PhotoTexturedMeshBuilder {
     }
 
     static var progressHandler: ((Double, String) -> Void)?
+
+    /// Hard ceiling so bake never hangs on phone
+    private static let bakeDeadlineSeconds: CFTimeInterval = 18
 
     static func makeScene(chunks: [CapturedMeshChunk], keyframes: [Keyframe]) -> SCNScene? {
         buildScene(chunks: chunks, keyframes: keyframes)
@@ -62,16 +65,20 @@ enum PhotoTexturedMeshBuilder {
         buildAndExport(chunks: chunks, keyframes: keyframes, to: directory)?.fileName
     }
 
-    // MARK: - Build hybrid scene
+    // MARK: - Build
 
     private static func buildScene(
         chunks: [CapturedMeshChunk],
         keyframes: [Keyframe]
     ) -> SCNScene? {
         guard !chunks.isEmpty else { return nil }
-        progressHandler?(0.05, "AI Mapping Photos…")
+        let t0 = CACurrentMediaTime()
+        func timedOut() -> Bool { CACurrentMediaTime() - t0 > bakeDeadlineSeconds }
 
-        let kfs = selectKeyframes(keyframes, limit: MeshDensityConfig.bakeKeyframeLimit)
+        progressHandler?(0.06, "Preparing…")
+
+        // Fewer keyframes = much faster color + less RAM
+        let kfs = selectKeyframes(keyframes, limit: min(MeshDensityConfig.bakeKeyframeLimit, 28))
         let photos: [UIImage?] = kfs.map { imageFromRGB($0.rgb, width: $0.rgbWidth, height: $0.rgbHeight) }
 
         let scene = SCNScene()
@@ -79,7 +86,6 @@ enum PhotoTexturedMeshBuilder {
         let root = SCNNode()
         root.name = "coloredMesh"
 
-        // Photo-texture buckets (only high-quality projections)
         let kfCount = max(kfs.count, 1)
         var texPos = Array(repeating: [Float](), count: kfCount)
         var texNrm = Array(repeating: [Float](), count: kfCount)
@@ -87,27 +93,33 @@ enum PhotoTexturedMeshBuilder {
         var texIdx = Array(repeating: [UInt32](), count: kfCount)
         var texBase = Array(repeating: UInt32(0), count: kfCount)
 
-        // Vertex-color body (reliable base)
         var allPos: [Float] = []
         var allNrm: [Float] = []
         var allCol: [Float] = []
         var allIdx: [UInt32] = []
         var base: UInt32 = 0
 
-        // For AI neighbor fill — store world positions with colors
-        var fillPoints: [(SIMD3<Float>, SIMD3<Float>)] = [] // position, rgb 0-1
+        // Sparse fill samples (cap small)
+        var fillSamples: [(SIMD3<Float>, SIMD3<Float>)] = []
+        fillSamples.reserveCapacity(800)
 
         let total = max(chunks.count, 1)
-        let triBudget = MeshDensityConfig.triangleBudget
+        let triBudget = min(MeshDensityConfig.triangleBudget, 280_000)
         var triUsed = 0
         var texTris = 0
         var vcTris = 0
 
+        // Prefer smaller detail chunks first
         let ordered = chunks.sorted { $0.positions.count < $1.positions.count }
 
         for (ci, chunk) in ordered.enumerated() {
+            if timedOut() {
+                progressHandler?(0.75, "Finishing Early…")
+                break
+            }
             if ci % 2 == 0 {
-                progressHandler?(0.08 + 0.55 * Double(ci) / Double(total), "Blending Texture + Color…")
+                let p = 0.08 + 0.60 * Double(ci) / Double(total)
+                progressHandler?(min(p, 0.68), "Coloring Surfaces…")
             }
 
             let vCount = chunk.positions.count
@@ -129,90 +141,81 @@ enum PhotoTexturedMeshBuilder {
                 return len > 1e-6 ? nn / len : SIMD3(0, 1, 0)
             }
 
-            // Precompute per-vertex colors (with AI multi-view)
-            var vWorld = [SIMD3<Float>](repeating: .zero, count: vCount)
-            var vNrm = [SIMD3<Float>](repeating: SIMD3(0, 1, 0), count: vCount)
-            var vCol = [(UInt8, UInt8, UInt8)](repeating: (175, 178, 182), count: vCount)
-            var vHas = [Bool](repeating: false, count: vCount)
-
-            for i in 0..<vCount {
-                let w = worldP(i)
-                let n = worldN(i)
-                vWorld[i] = w
-                vNrm[i] = n
-                let (c, ok) = aiColor(world: w, normal: n, keyframes: kfs)
-                vCol[i] = c
-                vHas[i] = ok
+            // Color only vertices we emit (lazy cache)
+            var colorCache = [Int: (UInt8, UInt8, UInt8)]()
+            func colorAt(_ i: Int) -> (UInt8, UInt8, UInt8) {
+                if let c = colorCache[i] { return c }
+                let c = fastColor(world: worldP(i), normal: worldN(i), keyframes: kfs)
+                colorCache[i] = c
+                // Keep sparse fill samples
+                if fillSamples.count < 800, colorCache.count % 12 == 0 {
+                    fillSamples.append((
+                        worldP(i),
+                        SIMD3(Float(c.0) / 255, Float(c.1) / 255, Float(c.2) / 255)
+                    ))
+                }
+                return c
             }
 
-            // AI fill missing vertex colors from neighbors in this chunk
-            aiFillVertexColors(colors: &vCol, has: &vHas, worlds: vWorld, passes: 3)
+            // Adaptive triangle step for speed
+            var triStep = 1
+            if triCount > 40_000 { triStep = 2 }
+            if triCount > 100_000 { triStep = 3 }
+            if triUsed > triBudget { triStep = max(triStep, 3) }
 
-            for i in 0..<vCount where vHas[i] {
-                let c = vCol[i]
-                fillPoints.append((
-                    vWorld[i],
-                    SIMD3(Float(c.0) / 255, Float(c.1) / 255, Float(c.2) / 255)
-                ))
-            }
-
-            let triStep = (triCount > 200_000 || triUsed > triBudget) ? 2 : 1
             var remap = [Int: UInt32]()
 
             for ti in stride(from: 0, to: triCount, by: triStep) {
+                if ti & 0x3FF == 0, timedOut() { break }
+
                 let i0 = Int(chunk.indices[ti * 3])
                 let i1 = Int(chunk.indices[ti * 3 + 1])
                 let i2 = Int(chunk.indices[ti * 3 + 2])
                 guard i0 < vCount, i1 < vCount, i2 < vCount else { continue }
 
-                let w0 = vWorld[i0], w1 = vWorld[i1], w2 = vWorld[i2]
-                let n0 = vNrm[i0], n1 = vNrm[i1], n2 = vNrm[i2]
+                let w0 = worldP(i0), w1 = worldP(i1), w2 = worldP(i2)
                 let area = simd_length(simd_cross(w1 - w0, w2 - w0))
                 if area < 1e-9 { continue }
 
+                let n0 = worldN(i0), n1 = worldN(i1), n2 = worldN(i2)
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // --- Try photo texture if projection quality is HIGH ---
-                if let pick = bestProjection(world: mid, normal: nMid, keyframes: kfs),
-                   pick.score > 0.35,
+                // Photo texture only when VERY confident (avoids warp + is cheap early-out)
+                if texTris < 40_000,
+                   let pick = bestProjection(world: mid, normal: nMid, keyframes: kfs),
+                   pick.score > 0.55,
                    photos[pick.index] != nil,
                    let uv0 = projectUV(world: w0, kf: kfs[pick.index]),
                    let uv1 = projectUV(world: w1, kf: kfs[pick.index]),
                    let uv2 = projectUV(world: w2, kf: kfs[pick.index]) {
                     let uvArea = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y))
-                    // Reject stretched / tiny UV triangles (what made K look bad)
-                    let maxEdge = max(
-                        simd_length(uv1 - uv0),
-                        max(simd_length(uv2 - uv1), simd_length(uv0 - uv2))
-                    )
-                    if uvArea > 1e-6, maxEdge < 0.55, maxEdge > 0.002 {
+                    let maxEdge = max(simd_length(uv1 - uv0), max(simd_length(uv2 - uv1), simd_length(uv0 - uv2)))
+                    if uvArea > 1e-5, maxEdge < 0.4, maxEdge > 0.003 {
                         let ki = pick.index
                         func pushT(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
                             texPos[ki].append(contentsOf: [w.x, w.y, w.z])
                             texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
-                            // SceneKit V often flipped vs image
                             texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
                             let id = texBase[ki]
                             texBase[ki] += 1
                             return id
                         }
-                        let a = pushT(w0, n0, uv0)
-                        let b = pushT(w1, n1, uv1)
-                        let c = pushT(w2, n2, uv2)
-                        texIdx[ki].append(contentsOf: [a, b, c])
+                        texIdx[ki].append(contentsOf: [
+                            pushT(w0, n0, uv0), pushT(w1, n1, uv1), pushT(w2, n2, uv2)
+                        ])
                         texTris += 1
                         triUsed += 1
                         continue
                     }
                 }
 
-                // --- Vertex color path (stable) ---
+                // Vertex color (main path)
                 func emit(_ i: Int) -> UInt32 {
                     if let e = remap[i] { return e }
-                    let w = vWorld[i]
-                    let n = vNrm[i]
-                    let c = vCol[i]
+                    let w = worldP(i)
+                    let n = worldN(i)
+                    let c = colorAt(i)
                     allPos.append(contentsOf: [w.x, w.y, w.z])
                     allNrm.append(contentsOf: [n.x, n.y, n.z])
                     allCol.append(contentsOf: [
@@ -229,16 +232,14 @@ enum PhotoTexturedMeshBuilder {
             }
         }
 
-        progressHandler?(0.78, "AI Filling Gaps…")
-
-        // Second AI pass: recolor any dull/gray vertices from nearby fillPoints
-        if !fillPoints.isEmpty, !allCol.isEmpty {
-            aiGlobalFill(positions: allPos, colors: &allCol, samples: fillPoints)
+        // LIGHT AI fill — O(verts) with tiny sample set, max ~0.5s
+        progressHandler?(0.72, "AI Touch-Up…")
+        if !fillSamples.isEmpty, !allCol.isEmpty, !timedOut() {
+            lightAIFill(positions: allPos, colors: &allCol, samples: fillSamples, deadline: t0 + bakeDeadlineSeconds)
         }
 
-        progressHandler?(0.88, "Building Hybrid 3D View…")
+        progressHandler?(0.88, "Building 3D View…")
 
-        // Photo texture nodes
         for ki in 0..<kfs.count {
             guard !texIdx[ki].isEmpty, let img = photos[ki] else { continue }
             let geom = makeTexturedGeometry(pos: texPos[ki], nrm: texNrm[ki], uv: texUV[ki], idx: texIdx[ki])
@@ -250,14 +251,12 @@ enum PhotoTexturedMeshBuilder {
             mat.diffuse.wrapT = .clamp
             mat.diffuse.magnificationFilter = .linear
             mat.diffuse.minificationFilter = .linear
-            mat.writesToDepthBuffer = true
             geom.materials = [mat]
             let node = SCNNode(geometry: geom)
             node.name = "photoSharp_\(ki)"
             root.addChildNode(node)
         }
 
-        // Vertex color body
         if !allIdx.isEmpty {
             let geom = makeVertexColorGeometry(pos: allPos, nrm: allNrm, col: allCol, idx: allIdx)
             let mat = SCNMaterial()
@@ -284,158 +283,99 @@ enum PhotoTexturedMeshBuilder {
         ambient.light?.intensity = 1050
         scene.rootNode.addChildNode(ambient)
 
+        progressHandler?(0.95, "Framing…")
         normalizeForPreview(scene)
         progressHandler?(1.0, "Ready")
-        print("[EnviroMap] hybrid texTris=\(texTris) vcTris=\(vcTris) kfs=\(kfs.count) fillPts=\(fillPoints.count)")
+        let dt = CACurrentMediaTime() - t0
+        print("[EnviroMap] fast hybrid \(String(format: "%.1f", dt))s tex=\(texTris) vc=\(vcTris) kfs=\(kfs.count)")
         return scene
     }
 
-    // MARK: - AI color / fill
+    // MARK: - Fast color (single best frame, limited search)
 
-    /// Multi-view consensus: best frame + soft second for stability (not heavy blur).
-    private static func aiColor(
+    private static func fastColor(
         world: SIMD3<Float>,
         normal: SIMD3<Float>,
         keyframes: [Keyframe]
-    ) -> ((UInt8, UInt8, UInt8), Bool) {
-        guard !keyframes.isEmpty else { return ((175, 178, 182), false) }
+    ) -> (UInt8, UInt8, UInt8) {
+        guard !keyframes.isEmpty else { return (175, 178, 182) }
 
         var bestW: Float = -1
         var bestC: (UInt8, UInt8, UInt8)?
-        var secondW: Float = -1
-        var secondC: (UInt8, UInt8, UInt8)?
 
+        // Search newest first; stop early once we have a strong match
         for kf in keyframes.reversed() {
-            guard let (c, w) = sampleScore(world: world, normal: normal, kf: kf) else { continue }
+            let toCam = kf.camPos - world
+            let dist = simd_length(toCam)
+            if dist < 0.05 || dist > 7 { continue }
+            let viewDir = toCam / max(dist, 1e-4)
+            let facing = abs(simd_dot(normal, viewDir))
+            if facing < 0.05 { continue }
+            let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
+            if view.z > -0.04 { continue }
+            guard let uv = projectUV(world: world, kf: kf) else { continue }
+            guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
+            let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
+            let w = Float(facing) * (1 / max(dist, 0.2)) * (0.4 + 0.6 * center)
             if w > bestW {
-                secondW = bestW; secondC = bestC
-                bestW = w; bestC = c
-            } else if w > secondW {
-                secondW = w; secondC = c
+                bestW = w
+                bestC = c
+                if w > 1.2 { break } // good enough
             }
         }
-
-        guard let c1 = bestC else { return ((170, 172, 176), false) }
-        if let c2 = secondC, secondW > bestW * 0.55 {
-            // Light consensus — only when second view agrees-ish
-            let r = UInt8(min(255, max(0, Int(Float(c1.0) * 0.75 + Float(c2.0) * 0.25))))
-            let g = UInt8(min(255, max(0, Int(Float(c1.1) * 0.75 + Float(c2.1) * 0.25))))
-            let b = UInt8(min(255, max(0, Int(Float(c1.2) * 0.75 + Float(c2.2) * 0.25))))
-            return (mildEnhance((r, g, b)), true)
-        }
-        return (mildEnhance(c1), true)
+        if let c = bestC { return mildEnhance(c) }
+        return (170, 172, 176)
     }
 
-    private static func sampleScore(
-        world: SIMD3<Float>,
-        normal: SIMD3<Float>,
-        kf: Keyframe
-    ) -> ((UInt8, UInt8, UInt8), Float)? {
-        let toCam = kf.camPos - world
-        let dist = simd_length(toCam)
-        if dist < 0.05 || dist > 8 { return nil }
-        let viewDir = toCam / max(dist, 1e-4)
-        let facing = abs(simd_dot(normal, viewDir))
-        if facing < 0.04 { return nil }
-        let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-        if view.z > -0.04 { return nil }
-        guard let uv = projectUV(world: world, kf: kf) else { return nil }
-        guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { return nil }
-        let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
-        let w = Float(facing) * (1 / max(dist, 0.2)) * (0.4 + 0.6 * center)
-        return (c, w)
-    }
-
-    /// Flood missing colors from nearest neighbors (mesh hole fill).
-    private static func aiFillVertexColors(
-        colors: inout [(UInt8, UInt8, UInt8)],
-        has: inout [Bool],
-        worlds: [SIMD3<Float>],
-        passes: Int
-    ) {
-        let n = colors.count
-        guard n > 0 else { return }
-        for _ in 0..<passes {
-            var next = colors
-            var nextHas = has
-            for i in 0..<n where !has[i] {
-                var r = 0, g = 0, b = 0, cnt = 0
-                // Sample a sparse set of known neighbors by distance
-                for j in 0..<n where has[j] {
-                    let d = simd_length(worlds[i] - worlds[j])
-                    if d < 0.12 {
-                        r += Int(colors[j].0)
-                        g += Int(colors[j].1)
-                        b += Int(colors[j].2)
-                        cnt += 1
-                        if cnt >= 6 { break }
-                    }
-                }
-                if cnt > 0 {
-                    next[i] = (UInt8(r / cnt), UInt8(g / cnt), UInt8(b / cnt))
-                    nextHas[i] = true
-                }
-            }
-            colors = next
-            has = nextHas
-        }
-    }
-
-    /// Spatial fill for residual gray/dull vertices in final mesh.
-    private static func aiGlobalFill(
+    /// O(verts × small samples) with hard deadline — never hangs.
+    private static func lightAIFill(
         positions: [Float],
         colors: inout [Float],
-        samples: [(SIMD3<Float>, SIMD3<Float>)]
+        samples: [(SIMD3<Float>, SIMD3<Float>)],
+        deadline: CFTimeInterval
     ) {
         let vCount = positions.count / 3
         guard vCount > 0, !samples.isEmpty else { return }
 
-        // Cap sample set for speed
-        let stride = max(1, samples.count / 2500)
-        let pts = stride == 1 ? samples : strideArray(samples, by: stride)
+        // Cap work
+        let maxVerts = min(vCount, 60_000)
+        let step = max(1, vCount / maxVerts)
+        let samp = samples.count > 200 ? Array(samples.prefix(200)) : samples
 
-        for i in 0..<vCount {
+        var i = 0
+        var processed = 0
+        while i < vCount {
+            if processed & 0x7FF == 0, CACurrentMediaTime() > deadline { break }
             let o = i * 4
-            guard o + 2 < colors.count else { continue }
+            guard o + 2 < colors.count else { break }
             let r = colors[o], g = colors[o + 1], b = colors[o + 2]
-            // Only fill very dull / near-gray missing look
             let avg = (r + g + b) / 3
             let sat = max(r, max(g, b)) - min(r, min(g, b))
-            if avg > 0.25, sat > 0.06 { continue }
-
-            let p = SIMD3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2])
-            var bestD: Float = 0.25
-            var best: SIMD3<Float>?
-            for (sp, sc) in pts {
-                let d = simd_length(p - sp)
-                if d < bestD {
-                    bestD = d
-                    best = sc
+            // Only touch dull/missing
+            if avg < 0.28 || sat < 0.05 {
+                let p = SIMD3(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2])
+                var bestD: Float = 0.18
+                var best: SIMD3<Float>?
+                for (sp, sc) in samp {
+                    let d = simd_length_squared(p - sp)
+                    if d < bestD * bestD {
+                        bestD = sqrt(d)
+                        best = sc
+                    }
+                }
+                if let sc = best {
+                    let t: Float = 0.65
+                    colors[o]     = r * (1 - t) + sc.x * t
+                    colors[o + 1] = g * (1 - t) + sc.y * t
+                    colors[o + 2] = b * (1 - t) + sc.z * t
                 }
             }
-            if let sc = best {
-                // Blend toward neighbor (AI completion, not overwrite)
-                let t: Float = 0.7
-                colors[o]     = r * (1 - t) + sc.x * t
-                colors[o + 1] = g * (1 - t) + sc.y * t
-                colors[o + 2] = b * (1 - t) + sc.z * t
-            }
-        }
-    }
-
-    private static func strideArray<T>(_ arr: [T], by step: Int) -> [T] {
-        guard step > 1 else { return arr }
-        var out: [T] = []
-        out.reserveCapacity(arr.count / step + 1)
-        var i = 0
-        while i < arr.count {
-            out.append(arr[i])
             i += step
+            processed += 1
         }
-        return out
     }
 
-    // MARK: - Projection (strict — only clean UVs)
+    // MARK: - Projection
 
     private struct ProjPick {
         let index: Int
@@ -451,16 +391,16 @@ enum PhotoTexturedMeshBuilder {
         for (i, kf) in keyframes.enumerated().reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.1 || dist > 5.5 { continue }
+            if dist < 0.12 || dist > 4.5 { continue }
             let viewDir = toCam / max(dist, 1e-4)
             let facing = simd_dot(normal, viewDir)
-            if facing < 0.35 { continue } // strict front-facing for photo tex
+            if facing < 0.45 { continue }
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-            if view.z > -0.08 { continue }
+            if view.z > -0.1 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
-            if center < 0.2 { continue } // avoid edges of photo
-            let score = facing * facing * (1 / max(dist, 0.25)) * center
+            if center < 0.25 { continue }
+            let score = facing * facing * (1 / max(dist, 0.3)) * center
             if best == nil || score > best!.score {
                 best = ProjPick(index: i, score: score)
             }
@@ -534,7 +474,7 @@ enum PhotoTexturedMeshBuilder {
         return SCNGeometry(sources: sources, elements: [element])
     }
 
-    // MARK: - Sampling helpers
+    // MARK: - Sampling
 
     private static func sampleBilinear(_ kf: Keyframe, u: Float, v: Float) -> (UInt8, UInt8, UInt8)? {
         let fx = u * Float(max(kf.rgbWidth - 1, 1))
@@ -568,7 +508,7 @@ enum PhotoTexturedMeshBuilder {
 
     private static func mildEnhance(_ c: (UInt8, UInt8, UInt8)) -> (UInt8, UInt8, UInt8) {
         func f(_ x: UInt8) -> UInt8 {
-            let v = (Float(x) / 255 - 0.5) * 1.1 + 0.5
+            let v = (Float(x) / 255 - 0.5) * 1.08 + 0.5
             return UInt8(min(255, max(0, v * 255)))
         }
         return (f(c.0), f(c.1), f(c.2))
@@ -692,7 +632,9 @@ enum PhotoTexturedMeshBuilder {
         viewport: CGSize,
         maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
-        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: maxWidth) else { return nil }
+        // Cap live keyframe size for bake speed
+        let cap = min(maxWidth, 640)
+        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap) else { return nil }
         let cam = frame.camera
         let camPos = SIMD3<Float>(
             cam.transform.columns.3.x,
