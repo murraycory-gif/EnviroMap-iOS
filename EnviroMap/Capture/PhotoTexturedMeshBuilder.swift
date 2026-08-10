@@ -337,6 +337,76 @@ enum PhotoTexturedMeshBuilder {
     }
 
 
+
+    /// Fills black holes with small solid colored quads from LiDAR depth.
+    private static func makeDepthFillQuads(_ points: [ColoredDepthPoint]) -> SCNNode? {
+        let maxQuads = 35_000
+        let step = max(1, points.count / maxQuads)
+        let h: Float = 0.028
+
+        var pos: [Float] = []
+        var col: [Float] = []
+        var idx: [UInt32] = []
+        let cap = min(points.count / max(step, 1), maxQuads)
+        pos.reserveCapacity(cap * 12)
+        col.reserveCapacity(cap * 16)
+        idx.reserveCapacity(cap * 6)
+
+        var base: UInt32 = 0
+        var n = 0
+        while n < points.count {
+            let p = points[n]
+            let c = p.color
+            let x = p.position.x
+            let y = p.position.y
+            let z = p.position.z
+            // 4 corners of a small world-XZ quad
+            pos.append(contentsOf: [x - h, y, z - h])
+            col.append(contentsOf: [c.x, c.y, c.z, 1])
+            pos.append(contentsOf: [x + h, y, z - h])
+            col.append(contentsOf: [c.x, c.y, c.z, 1])
+            pos.append(contentsOf: [x + h, y, z + h])
+            col.append(contentsOf: [c.x, c.y, c.z, 1])
+            pos.append(contentsOf: [x - h, y, z + h])
+            col.append(contentsOf: [c.x, c.y, c.z, 1])
+            idx.append(contentsOf: [base, base &+ 1, base &+ 2, base, base &+ 2, base &+ 3])
+            base &+= 4
+            n += step
+        }
+        guard !pos.isEmpty else { return nil }
+
+        let posData = pos.withUnsafeBufferPointer { Data(buffer: $0) }
+        let colData = col.withUnsafeBufferPointer { Data(buffer: $0) }
+        let idxData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
+        let sources = [
+            SCNGeometrySource(
+                data: posData, semantic: .vertex, vectorCount: pos.count / 3,
+                usesFloatComponents: true, componentsPerVector: 3,
+                bytesPerComponent: 4, dataOffset: 0, dataStride: 12
+            ),
+            SCNGeometrySource(
+                data: colData, semantic: .color, vectorCount: col.count / 4,
+                usesFloatComponents: true, componentsPerVector: 4,
+                bytesPerComponent: 4, dataOffset: 0, dataStride: 16
+            ),
+        ]
+        let element = SCNGeometryElement(
+            data: idxData, primitiveType: .triangles,
+            primitiveCount: idx.count / 3, bytesPerIndex: 4
+        )
+        let geom = SCNGeometry(sources: sources, elements: [element])
+        let mat = SCNMaterial()
+        mat.lightingModel = .constant
+        mat.isDoubleSided = true
+        mat.diffuse.contents = UIColor.white
+        mat.locksAmbientWithDiffuse = true
+        geom.materials = [mat]
+        let node = SCNNode(geometry: geom)
+        node.name = "depthFillQuads"
+        node.renderingOrder = -1
+        return node
+    }
+
     // MARK: - Fast color (single best frame, limited search)
 
     private static func fastColor(
