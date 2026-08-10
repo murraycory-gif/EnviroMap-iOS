@@ -443,9 +443,6 @@ struct MoreToolsTabView: View {
                         .foregroundStyle(AppTheme.textSecondary)
                 }
             }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
-            }
             .fullScreenCover(isPresented: $showScanner) {
                 FullEnvironmentScanView()
                     .environmentObject(store)
