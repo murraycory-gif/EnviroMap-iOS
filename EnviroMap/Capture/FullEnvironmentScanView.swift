@@ -809,6 +809,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var isRunning = false
 
     private let stateLock = NSLock()
+    private let captureQueue = DispatchQueue(label: "enviromap.scan.capture", qos: .userInitiated)
     /// Copied geometry only — never keep live ARMeshAnchor refs long-term
     private var chunks: [UUID: CapturedMeshChunk] = [:]
     private var keyframes: [PhotoTexturedMeshBuilder.Keyframe] = []
@@ -895,17 +896,19 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // Merge full-quality copies into existing store (never wipe if harvest fails)
+        // Full-quality pull right before bake (main/caller may be background)
         if let frame = arView?.session.currentFrame {
-            ingestKeyframe(from: frame)
-            stateLock.lock()
-            for a in frame.anchors {
-                guard let mesh = a as? ARMeshAnchor else { continue }
-                if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
-                    chunks[chunk.id] = chunk
+            autoreleasepool {
+                ingestKeyframe(from: frame)
+                let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+                for mesh in meshes {
+                    if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
+                        stateLock.lock()
+                        chunks[chunk.id] = chunk
+                        stateLock.unlock()
+                    }
                 }
             }
-            stateLock.unlock()
         }
     }
 
@@ -926,6 +929,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         guard let scene = PhotoTexturedMeshBuilder.makeScene(chunks: meshChunks, keyframes: frames) else {
             return nil
         }
+        PhotoTexturedMeshBuilder.normalizeForPreview(scene)
+        _ = PhotoTexturedMeshBuilder.writeScene(scene, to: tmp, name: "room_full.scn")
         return .init(directory: tmp, fileName: "room_full.scn", scene: scene)
     }
 
@@ -943,6 +948,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     // MARK: - Live blue mesh (throttled — better coverage feedback)
 
     private var lastVizTime: [UUID: TimeInterval] = [:]
+    private var lastClassNoteTime: TimeInterval = 0
 
     func renderer(_ renderer: SCNSceneRenderer, nodeFor anchor: ARAnchor) -> SCNNode? {
         guard anchor is ARMeshAnchor else { return nil }
@@ -951,34 +957,19 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
+        // Visual only — mesh storage happens on captureQueue
         applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
-        // Also copy into our safe store
-        if let chunk = Self.copyChunk(from: mesh) {
-            stateLock.lock()
-            chunks[chunk.id] = chunk
-            let mc = chunks.count
-            let fc = keyframes.count
-            stateLock.unlock()
-            emitStats(meshCount: mc, frameCount: fc)
-        }
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[mesh.identifier], now - last < 0.40 { return }
+        // Blue wire is expensive — update rarely
+        if let last = lastVizTime[mesh.identifier], now - last < 0.75 { return }
         lastVizTime[mesh.identifier] = now
         applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
-        if let chunk = Self.copyChunk(from: mesh) {
-            stateLock.lock()
-            chunks[chunk.id] = chunk
-            let mc = chunks.count
-            let fc = keyframes.count
-            stateLock.unlock()
-            emitStats(meshCount: mc, frameCount: fc)
-        }
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
@@ -1070,16 +1061,20 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         guard isRunning else { return }
         let t = frame.timestamp
 
-        // Copy mesh from frame anchors (throttled) — safe snapshot
+        // ARMeshAnchor buffers are only valid in this callback — copy here, not async.
+        // Intervals are deliberately slower so the UI never freezes mid-scan.
         if t - lastMeshCopyTime >= MeshDensityConfig.meshCopyInterval {
             lastMeshCopyTime = t
-            ingestMeshes(from: frame)
+            autoreleasepool {
+                ingestMeshes(from: frame)
+            }
         }
 
-        // Color keyframes (throttled)
         if t - lastKeyframeTime >= MeshDensityConfig.keyframeInterval {
             lastKeyframeTime = t
-            ingestKeyframe(from: frame)
+            autoreleasepool {
+                ingestKeyframe(from: frame)
+            }
         }
     }
 
@@ -1090,10 +1085,15 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func ingestMeshes(from frame: ARFrame) {
+        ingestMeshAnchors(frame.anchors.compactMap { $0 as? ARMeshAnchor })
+    }
+
+    private func ingestMeshAnchors(_ anchors: [ARMeshAnchor]) {
+        guard !anchors.isEmpty else { return }
         var copied: [CapturedMeshChunk] = []
-        for anchor in frame.anchors {
-            guard let mesh = anchor as? ARMeshAnchor else { continue }
-            if let chunk = Self.copyChunk(from: mesh) {
+        copied.reserveCapacity(anchors.count)
+        for mesh in anchors {
+            if let chunk = Self.copyChunk(from: mesh, fullQuality: false) {
                 copied.append(chunk)
             }
         }
@@ -1101,12 +1101,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         stateLock.lock()
         for c in copied {
-            // Always keep latest geometry for each mesh tile (updates fill holes)
             chunks[c.id] = c
         }
-        // Only drop if extreme (protects memory); prefer completeness
         if chunks.count > maxChunks {
-            // Keep small detail chunks (cars, furniture edges). Drop largest bulk first.
             let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
             let removeCount = chunks.count - maxChunks
             for i in 0..<removeCount {
@@ -1119,7 +1116,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         updateAICoach(meshCount: meshCount)
         emitStats(meshCount: meshCount, frameCount: frameCount)
-        updateCoverageMarkersIfNeeded()
+        // Coverage markers only occasionally (main-ish SCN work)
+        if meshCount % 4 == 0 {
+            DispatchQueue.main.async { [weak self] in
+                self?.updateCoverageMarkersIfNeeded()
+            }
+        }
     }
 
     private func updateAICoach(meshCount: Int) {
@@ -1208,7 +1210,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     private func emitStats(meshCount: Int, frameCount: Int) {
         let now = CACurrentMediaTime()
-        if now - lastStatsEmit < 0.25 { return }
+        if now - lastStatsEmit < 0.45 { return }
         lastStatsEmit = now
         DispatchQueue.main.async { [weak self] in
             self?.onStats?(meshCount, frameCount)
@@ -1219,6 +1221,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     private func noteClassification(from mesh: ARMeshAnchor) {
         guard aiCoachEnabled else { return }
+        let now = CACurrentMediaTime()
+        if now - lastClassNoteTime < 0.8 { return }
+        lastClassNoteTime = now
         // ARMeshClassification via geometry if available (iOS 14+)
         let g = mesh.geometry
         // faces with classification - optional path
@@ -1243,7 +1248,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let vCount = vSource.count
         guard vCount > 0, faces.count > 0 else { return nil }
         // Allow larger anchors so cars/furniture stay complete
-        guard vCount < MeshDensityConfig.liveVertexSoftCap * (fullQuality ? 2 : 1) else { return nil }
+        guard vCount < (fullQuality ? MeshDensityConfig.finalVertexSoftCap : MeshDensityConfig.liveVertexSoftCap) else { return nil }
 
         // Live scan may lightly subsample; final harvest keeps full density.
         let step: Int

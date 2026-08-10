@@ -483,8 +483,9 @@ static func buildAndExport(
         viewport: CGSize,
         maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
-        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: maxWidth),
-              let image = uiImage(rgb: rgb, width: w, height: h) else { return nil }
+        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: maxWidth) else { return nil }
+        // Skip full UIImage during live scan (heavy). Tiny placeholder keeps type happy.
+        let image = UIImage()
         let cam = frame.camera
         let camPos = SIMD3<Float>(
             cam.transform.columns.3.x,
