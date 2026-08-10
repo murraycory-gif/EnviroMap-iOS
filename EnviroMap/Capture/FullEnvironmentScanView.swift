@@ -13,6 +13,7 @@ struct FullEnvironmentScanView: View {
     @State private var name: String = ""
     @State private var saveError: String?
     @State private var didSave = false
+    @State private var savedSessionForViewer: RoomSession?
 
     var body: some View {
         ZStack {
@@ -21,13 +22,37 @@ struct FullEnvironmentScanView: View {
             switch model.phase {
             case .idle, .scanning, .failed:
                 scanCameraLayer
-            case .processing:
+            case .processing, .saving:
                 processingLayer
-            case .preview, .saving:
-                previewLayer
+            case .preview:
+                // Legacy — should not stay here; we open the real viewer
+                processingLayer
+            }
+
+            // After bake: open the actual Room viewer (not the broken black Review)
+            if let session = savedSessionForViewer {
+                NavigationStack {
+                    RoomViewerView(session: session)
+                        .environmentObject(store)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Done") {
+                                    model.stop()
+                                    dismiss()
+                                }
+                                .fontWeight(.semibold)
+                            }
+                        }
+                }
+                .transition(.opacity)
             }
         }
-        .preferredColorScheme(model.phase == .preview || model.phase == .saving ? .light : .dark)
+        .preferredColorScheme(.dark)
+        .onChange(of: model.phase) { _, newPhase in
+            if newPhase == .preview {
+                autoSaveAndOpenViewer()
+            }
+        }
         .onAppear {
             if name.isEmpty { name = defaultName() }
             model.start()

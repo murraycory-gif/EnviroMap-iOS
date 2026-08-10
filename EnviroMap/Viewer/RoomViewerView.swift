@@ -32,12 +32,12 @@ struct RoomViewerView: View {
 
     var body: some View {
         ZStack {
-            // Soft studio bg
+            // Black voids like 3D Snap — photo mesh reads clearer
             LinearGradient(
                 colors: [
-                    Color(red: 0.08, green: 0.10, blue: 0.16),
-                    Color(red: 0.12, green: 0.16, blue: 0.28),
-                    Color(red: 0.06, green: 0.08, blue: 0.12),
+                    Color.black,
+                    Color(red: 0.05, green: 0.06, blue: 0.09),
+                    Color.black,
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
