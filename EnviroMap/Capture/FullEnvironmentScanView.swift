@@ -711,6 +711,24 @@ struct CapturedMeshChunk {
     let positions: [SIMD3<Float>]
     let normals: [SIMD3<Float>]
     let indices: [UInt32]
+    /// Optional baked vertex colors (0...1) for depth-fused mesh
+    let colors: [SIMD3<Float>]?
+
+    init(
+        id: UUID,
+        transform: simd_float4x4,
+        positions: [SIMD3<Float>],
+        normals: [SIMD3<Float>],
+        indices: [UInt32],
+        colors: [SIMD3<Float>]? = nil
+    ) {
+        self.id = id
+        self.transform = transform
+        self.positions = positions
+        self.normals = normals
+        self.indices = indices
+        self.colors = colors
+    }
 }
 
 /// Colored LiDAR/scene-depth samples used to fill holes in the mesh
@@ -1453,6 +1471,135 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             depthPoints = keep
         }
         stateLock.unlock()
+    }
+
+
+    /// LiDAR depth map → real triangle mesh with camera colors (fills ARKit holes).
+    private static func depthFrameToMeshChunk(_ frame: ARFrame, tag: Int) -> CapturedMeshChunk? {
+        guard let depthMap = frame.sceneDepth?.depthMap else { return nil }
+        let cam = frame.camera
+        let orientation: UIInterfaceOrientation = .portrait
+        let viewport = CGSize(width: 390, height: 844)
+
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        let dw = CVPixelBufferGetWidth(depthMap)
+        let dh = CVPixelBufferGetHeight(depthMap)
+        guard dw > 16, dh > 16, let dBase = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+        let dStride = CVPixelBufferGetBytesPerRow(depthMap)
+
+        guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
+            from: frame, orientation: orientation, viewport: viewport, maxWidth: 640
+        ) else { return nil }
+
+        let step = 3
+        let cols = max(2, (dw + step - 1) / step)
+        let rows = max(2, (dh + step - 1) / step)
+
+        let imgW = CVPixelBufferGetWidth(frame.capturedImage)
+        let imgH = CVPixelBufferGetHeight(frame.capturedImage)
+        let sx = Float(dw) / Float(max(imgW, 1))
+        let sy = Float(dh) / Float(max(imgH, 1))
+        let K = cam.intrinsics
+        let fx = K[0, 0] * sx
+        let fy = K[1, 1] * sy
+        let cx = K[2, 0] * sx
+        let cy = K[2, 1] * sy
+
+        var gridPos = [SIMD3<Float>?](repeating: nil, count: cols * rows)
+        var gridCol = [SIMD3<Float>](repeating: SIMD3(0.55, 0.56, 0.58), count: cols * rows)
+
+        for r in 0..<rows {
+            let v = min(r * step, dh - 1)
+            for c in 0..<cols {
+                let u = min(c * step, dw - 1)
+                let depth = dBase.advanced(by: v * dStride + u * MemoryLayout<Float32>.size)
+                    .assumingMemoryBound(to: Float32.self).pointee
+                guard depth.isFinite, depth > 0.12, depth < 6.0 else { continue }
+                let x = (Float(u) - cx) * depth / max(fx, 1e-4)
+                let y = (Float(v) - cy) * depth / max(fy, 1e-4)
+                let camSpace = SIMD4<Float>(x, -y, -depth, 1)
+                let world4 = cam.transform * camSpace
+                let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                guard world.x.isFinite, world.y.isFinite, world.z.isFinite else { continue }
+
+                let projected = cam.projectPoint(world, orientation: orientation, viewportSize: viewport)
+                let nx = projected.x / max(viewport.width, 1)
+                let ny = projected.y / max(viewport.height, 1)
+                let imgNorm = CGPoint(x: nx, y: ny).applying(kf.displayTransform.inverted())
+                var col = SIMD3<Float>(0.55, 0.56, 0.58)
+                if imgNorm.x >= 0, imgNorm.x <= 1, imgNorm.y >= 0, imgNorm.y <= 1 {
+                    let px = min(max(Int(Float(imgNorm.x) * Float(kf.rgbWidth - 1)), 0), kf.rgbWidth - 1)
+                    let py = min(max(Int(Float(imgNorm.y) * Float(kf.rgbHeight - 1)), 0), kf.rgbHeight - 1)
+                    let o = (py * kf.rgbWidth + px) * 3
+                    if o + 2 < kf.rgb.count {
+                        col = SIMD3(
+                            Float(kf.rgb[o]) / 255,
+                            Float(kf.rgb[o + 1]) / 255,
+                            Float(kf.rgb[o + 2]) / 255
+                        )
+                    }
+                }
+                gridPos[r * cols + c] = world
+                gridCol[r * cols + c] = col
+            }
+        }
+
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var colors: [SIMD3<Float>] = []
+        var indices: [UInt32] = []
+        positions.reserveCapacity(cols * rows / 2)
+        var indexOf = [Int: Int]()
+
+        func vert(_ gi: Int) -> UInt32 {
+            if let existing = indexOf[gi] { return UInt32(existing) }
+            let idx = positions.count
+            positions.append(gridPos[gi]!)
+            normals.append(SIMD3(0, 1, 0))
+            colors.append(gridCol[gi])
+            indexOf[gi] = idx
+            return UInt32(idx)
+        }
+
+        let maxJump: Float = 0.14
+        for r in 0..<(rows - 1) {
+            for c in 0..<(cols - 1) {
+                let i00 = r * cols + c
+                let i10 = r * cols + (c + 1)
+                let i01 = (r + 1) * cols + c
+                let i11 = (r + 1) * cols + (c + 1)
+                guard let p00 = gridPos[i00], let p10 = gridPos[i10],
+                      let p01 = gridPos[i01], let p11 = gridPos[i11] else { continue }
+                if simd_length(p00 - p10) > maxJump { continue }
+                if simd_length(p00 - p01) > maxJump { continue }
+                if simd_length(p10 - p11) > maxJump { continue }
+                if simd_length(p01 - p11) > maxJump { continue }
+                let a = vert(i00), b = vert(i10), d = vert(i01), e = vert(i11)
+                indices.append(contentsOf: [a, b, e, a, e, d])
+                let n = simd_normalize(simd_cross(p10 - p00, p01 - p00))
+                if Int(a) < normals.count, n.x.isFinite { normals[Int(a)] = n }
+            }
+        }
+
+        guard positions.count > 40, indices.count > 120, positions.count < 90_000 else { return nil }
+
+        let cp = cam.transform.columns.3
+        let seed = UInt32(tag & 0xFF) << 24
+            | UInt32(abs(Int(cp.x * 7)) & 0xFF) << 16
+            | UInt32(abs(Int(cp.y * 7)) & 0xFF) << 8
+            | UInt32(abs(Int(cp.z * 7)) & 0xFF)
+        let id = UUID(uuidString: String(format: "DE970000-0000-4000-8000-%012x", Int(seed))) ?? UUID()
+
+        return CapturedMeshChunk(
+            id: id,
+            transform: matrix_identity_float4x4,
+            positions: positions,
+            normals: normals,
+            indices: indices,
+            colors: colors
+        )
     }
 
     private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false, liveBank: Bool = false) -> CapturedMeshChunk? {
