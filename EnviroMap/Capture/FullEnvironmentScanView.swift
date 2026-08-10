@@ -861,8 +861,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 80
-    private let maxChunks = 2000
+    private var maxKeyframes: Int { MeshDensityConfig.maxKeyframes }
+    private var maxChunks: Int { MeshDensityConfig.maxChunks }
     private var coverageRoot: SCNNode?
     private var lastMarkerUpdate: TimeInterval = 0
 
@@ -1093,7 +1093,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         var indices = [UInt32]()
         let faces = mesh.faces
         // Subsample triangles for smooth 60fps blue mesh
-        let faceStep = faces.count > 8000 ? 3 : (faces.count > 3000 ? 2 : 1)
+        let faceStep = MeshDensityConfig.blueWireFaceStep(faceCount: faces.count)
         for f in stride(from: 0, to: faces.count, by: faceStep) {
             for c in 0..<faces.indexCountPerPrimitive {
                 let off = (f * faces.indexCountPerPrimitive + c) * faces.bytesPerIndex
@@ -1128,13 +1128,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let t = frame.timestamp
 
         // Copy mesh from frame anchors (throttled) — safe snapshot
-        if t - lastMeshCopyTime >= 0.14 {
+        if t - lastMeshCopyTime >= MeshDensityConfig.meshCopyInterval {
             lastMeshCopyTime = t
             ingestMeshes(from: frame)
         }
 
         // Color keyframes (throttled)
-        if t - lastKeyframeTime >= 0.12 {
+        if t - lastKeyframeTime >= MeshDensityConfig.keyframeInterval {
             lastKeyframeTime = t
             ingestKeyframe(from: frame)
         }
@@ -1248,7 +1248,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             from: frame,
             orientation: orientation,
             viewport: viewport,
-            maxWidth: (UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true) ? 720 : 480
+            maxWidth: MeshDensityConfig.keyframeMaxWidth
         ) else { return }
 
         stateLock.lock()
@@ -1300,15 +1300,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let vCount = vSource.count
         guard vCount > 0, faces.count > 0 else { return nil }
         // Allow larger anchors so cars/furniture stay complete
-        guard vCount < 250_000 else { return nil }
+        guard vCount < MeshDensityConfig.liveVertexSoftCap * (fullQuality ? 2 : 1) else { return nil }
 
-        // Live scan: light subsample. Final harvest: keep every vertex/face.
+        // Live scan may lightly subsample; final harvest keeps full density.
         let step: Int
         if fullQuality {
             step = 1
         } else {
-            let hi = UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
-            step = hi ? (vCount > 60_000 ? 2 : 1) : (vCount > 25_000 ? 2 : 1)
+            step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }
 
         var positions: [SIMD3<Float>] = []
@@ -1331,7 +1330,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         var indices = [UInt32]()
-        let faceStep = fullQuality ? 1 : (faces.count > 50_000 ? 2 : 1)
+        let faceStep = fullQuality ? 1 : MeshDensityConfig.liveFaceStep(faceCount: faces.count)
         indices.reserveCapacity(max(1, faces.count / faceStep) * faces.indexCountPerPrimitive)
         for f in stride(from: 0, to: faces.count, by: faceStep) {
             var tri = [UInt32]()

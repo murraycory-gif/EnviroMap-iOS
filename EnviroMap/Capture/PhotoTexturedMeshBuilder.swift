@@ -72,7 +72,7 @@ enum PhotoTexturedMeshBuilder {
         progressHandler?(0.05, "Gathering surfaces…")
 
         // Prefer recent, well-spaced frames (fast + sharp)
-        let kfs = selectKeyframes(keyframes, limit: 32)
+        let kfs = selectKeyframes(keyframes, limit: MeshDensityConfig.bakeKeyframeLimit)
         // If no keyframes, still build gray mesh so user sees shape
         let hasColor = !kfs.isEmpty
 
@@ -84,10 +84,10 @@ enum PhotoTexturedMeshBuilder {
         var tris: [Tri] = []
         var est = 0
         for c in chunks { est += c.indices.count / 3 }
-        tris.reserveCapacity(min(est, 200_000))
+        tris.reserveCapacity(min(est, MeshDensityConfig.triangleBudget + 20_000))
 
         // Global triangle budget — prevents freeze/OOM, keeps objects
-        let budget = 180_000
+        let budget = MeshDensityConfig.triangleBudget
         let strideTri = est > budget ? max(1, (est + budget - 1) / budget) : 1
 
         for chunk in chunks {
@@ -232,8 +232,10 @@ enum PhotoTexturedMeshBuilder {
         keyframes: [Keyframe]
     ) -> (UInt8, UInt8, UInt8) {
         let c = (w0 + w1 + w2) / 3
-        // 4 samples — sharp + fast
-        let pts = [c, w0, w1, w2]
+        // Density-aware samples (more = sharper object colors)
+        let pts: [SIMD3<Float>] = MeshDensityConfig.samplesPerTriangle >= 5
+            ? [c, w0, w1, w2, (w0 + w1) * 0.5]
+            : [c, w0, w1, w2]
         var r = 0, g = 0, b = 0, n = 0
         for p in pts {
             if let s = sampleBestColor(world: p, normal: normal, keyframes: keyframes) {
@@ -349,10 +351,12 @@ enum PhotoTexturedMeshBuilder {
     }
 
     private static func quantize(_ rgb: (UInt8, UInt8, UInt8)) -> UInt32 {
-        let r = UInt32(rgb.0 >> 3)
-        let g = UInt32(rgb.1 >> 3)
-        let b = UInt32(rgb.2 >> 3)
-        return (r << 10) | (g << 5) | b
+        let s = MeshDensityConfig.quantizeShift
+        let r = UInt32(rgb.0 >> s)
+        let g = UInt32(rgb.1 >> s)
+        let b = UInt32(rgb.2 >> s)
+        let bits = 8 - s
+        return (r << (bits * 2)) | (g << bits) | b
     }
 
     private static func rgbAt(u: Float, v: Float, kf: Keyframe) -> (UInt8, UInt8, UInt8) {
@@ -383,7 +387,7 @@ enum PhotoTexturedMeshBuilder {
         from frame: ARFrame,
         orientation: UIInterfaceOrientation,
         viewport: CGSize,
-        maxWidth: Int = 560
+        maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
         guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: maxWidth),
               let image = uiImage(rgb: rgb, width: w, height: h) else { return nil }

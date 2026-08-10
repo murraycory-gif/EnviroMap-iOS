@@ -33,6 +33,7 @@
 		A024 /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B024 /* LibraryView.swift */; };
 		A025 /* RoomViewerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B025 /* RoomViewerView.swift */; };
 		A026 /* ARWalkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B026 /* ARWalkView.swift */; };
+		A027 /* MeshDensityConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B027 /* MeshDensityConfig.swift */; };
 		A900 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B900 /* Assets.xcassets */; };
 		A901 /* RoomPlan.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B901 /* RoomPlan.framework */; };
 		A902 /* RealityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B902 /* RealityKit.framework */; };
@@ -68,6 +69,7 @@
 		B024 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Library/LibraryView.swift"; sourceTree = "<group>"; };
 		B025 /* RoomViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Viewer/RoomViewerView.swift"; sourceTree = "<group>"; };
 		B026 /* ARWalkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Viewer/ARWalkView.swift"; sourceTree = "<group>"; };
+		B027 /* MeshDensityConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Capture/MeshDensityConfig.swift"; sourceTree = "<group>"; };
 		B900 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B901 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		B902 /* EnviroMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EnviroMap.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -132,6 +134,7 @@
 				B024 /* LibraryView.swift */,
 				B025 /* RoomViewerView.swift */,
 				B026 /* ARWalkView.swift */,
+				B027 /* MeshDensityConfig.swift */,
 				B900 /* Assets.xcassets */,
 				B901 /* Info.plist */,
 			);
@@ -248,6 +251,7 @@
 				A024 /* LibraryView.swift in Sources */,
 				A025 /* RoomViewerView.swift in Sources */,
 				A026 /* ARWalkView.swift in Sources */,
+				A027 /* MeshDensityConfig.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

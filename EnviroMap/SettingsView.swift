@@ -81,9 +81,9 @@ struct SettingsView: View {
                             )
                             Divider().overlay(Color.white.opacity(0.08))
                             toggleRow(
-                                icon: "camera.aperture",
-                                title: "High Detail Capture",
-                                subtitle: "More mesh + richer photo color",
+                                icon: "square.3.layers.3d.top.filled",
+                                title: "High Mesh Density",
+                                subtitle: "Max triangles + sharper real colors (cars, rooms). Slightly longer bake.",
                                 isOn: $highDetail
                             )
                             Divider().overlay(Color.white.opacity(0.08))
