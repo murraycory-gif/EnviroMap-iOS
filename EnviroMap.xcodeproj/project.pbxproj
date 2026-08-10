@@ -42,40 +42,40 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		F01 /* EnviroMapApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnviroMapApp.swift; sourceTree = "<group>"; };
-		F02 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
-		F03 /* MainHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainHubView.swift; sourceTree = "<group>"; };
-		F04 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		F05 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
-		F06 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
-		F07 /* EnviroMapLogo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnviroMapLogo.swift; sourceTree = "<group>"; };
-		F08 /* RoomPlanHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomPlanHubView.swift; sourceTree = "<group>"; };
-		F09 /* RoomPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomPlannerView.swift; sourceTree = "<group>"; };
-		F10 /* RulerToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RulerToolView.swift; sourceTree = "<group>"; };
-		F11 /* LevelToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelToolView.swift; sourceTree = "<group>"; };
-		F12 /* AreaToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AreaToolView.swift; sourceTree = "<group>"; };
-		F13 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloorPlanView.swift; sourceTree = "<group>"; };
-		F14 /* ImageTo3DView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTo3DView.swift; sourceTree = "<group>"; };
-		F15 /* TextTo3DView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextTo3DView.swift; sourceTree = "<group>"; };
-		F16 /* RoomCaptureModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture/RoomCaptureModel.swift; sourceTree = "<group>"; };
-		F17 /* RoomCaptureRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture/RoomCaptureRepresentable.swift; sourceTree = "<group>"; };
-		F18 /* ScanFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture/ScanFlowView.swift; sourceTree = "<group>"; };
-		F19 /* DenseMeshCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture/DenseMeshCollector.swift; sourceTree = "<group>"; };
-		F20 /* FullEnvironmentScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture/FullEnvironmentScanView.swift; sourceTree = "<group>"; };
-		F21 /* PhotoTexturedMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture/PhotoTexturedMeshBuilder.swift; sourceTree = "<group>"; };
-		F22 /* RoomSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/RoomSession.swift; sourceTree = "<group>"; };
-		F23 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Storage/SessionStore.swift; sourceTree = "<group>"; };
-		F24 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Library/LibraryView.swift; sourceTree = "<group>"; };
-		F25 /* RoomViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Viewer/RoomViewerView.swift; sourceTree = "<group>"; };
-		F26 /* ARWalkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Viewer/ARWalkView.swift; sourceTree = "<group>"; };
-		ASET /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		INF1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		APP1 /* EnviroMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EnviroMap.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		FRR1 /* RoomPlan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RoomPlan.framework; path = System/Library/Frameworks/RoomPlan.framework; sourceTree = SDKROOT; };
-		FRR2 /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = System/Library/Frameworks/RealityKit.framework; sourceTree = SDKROOT; };
-		FRR3 /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = System/Library/Frameworks/ARKit.framework; sourceTree = SDKROOT; };
-		FRR4 /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = System/Library/Frameworks/CoreMotion.framework; sourceTree = SDKROOT; };
-		FRR5 /* SceneKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SceneKit.framework; path = System/Library/Frameworks/SceneKit.framework; sourceTree = SDKROOT; };
+		F01 /* EnviroMapApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EnviroMapApp.swift"; sourceTree = "<group>"; };
+		F02 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RootView.swift"; sourceTree = "<group>"; };
+		F03 /* MainHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MainHubView.swift"; sourceTree = "<group>"; };
+		F04 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsView.swift"; sourceTree = "<group>"; };
+		F05 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "OnboardingView.swift"; sourceTree = "<group>"; };
+		F06 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppTheme.swift"; sourceTree = "<group>"; };
+		F07 /* EnviroMapLogo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EnviroMapLogo.swift"; sourceTree = "<group>"; };
+		F08 /* RoomPlanHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RoomPlanHubView.swift"; sourceTree = "<group>"; };
+		F09 /* RoomPlannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RoomPlannerView.swift"; sourceTree = "<group>"; };
+		F10 /* RulerToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RulerToolView.swift"; sourceTree = "<group>"; };
+		F11 /* LevelToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelToolView.swift"; sourceTree = "<group>"; };
+		F12 /* AreaToolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AreaToolView.swift"; sourceTree = "<group>"; };
+		F13 /* FloorPlanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FloorPlanView.swift"; sourceTree = "<group>"; };
+		F14 /* ImageTo3DView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ImageTo3DView.swift"; sourceTree = "<group>"; };
+		F15 /* TextTo3DView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TextTo3DView.swift"; sourceTree = "<group>"; };
+		F16 /* RoomCaptureModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Capture/RoomCaptureModel.swift"; sourceTree = "<group>"; };
+		F17 /* RoomCaptureRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Capture/RoomCaptureRepresentable.swift"; sourceTree = "<group>"; };
+		F18 /* ScanFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Capture/ScanFlowView.swift"; sourceTree = "<group>"; };
+		F19 /* DenseMeshCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Capture/DenseMeshCollector.swift"; sourceTree = "<group>"; };
+		F20 /* FullEnvironmentScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Capture/FullEnvironmentScanView.swift"; sourceTree = "<group>"; };
+		F21 /* PhotoTexturedMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Capture/PhotoTexturedMeshBuilder.swift"; sourceTree = "<group>"; };
+		F22 /* RoomSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Models/RoomSession.swift"; sourceTree = "<group>"; };
+		F23 /* SessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Storage/SessionStore.swift"; sourceTree = "<group>"; };
+		F24 /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Library/LibraryView.swift"; sourceTree = "<group>"; };
+		F25 /* RoomViewerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Viewer/RoomViewerView.swift"; sourceTree = "<group>"; };
+		F26 /* ARWalkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Viewer/ARWalkView.swift"; sourceTree = "<group>"; };
+		ASET /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Assets.xcassets"; sourceTree = "<group>"; };
+		INF1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+		APP1 /* EnviroMap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "EnviroMap.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		FRR1 /* RoomPlan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RoomPlan.framework; path = "System/Library/Frameworks/RoomPlan.framework"; sourceTree = SDKROOT; };
+		FRR2 /* RealityKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = RealityKit.framework; path = "System/Library/Frameworks/RealityKit.framework"; sourceTree = SDKROOT; };
+		FRR3 /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = "System/Library/Frameworks/ARKit.framework"; sourceTree = SDKROOT; };
+		FRR4 /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = "System/Library/Frameworks/CoreMotion.framework"; sourceTree = SDKROOT; };
+		FRR5 /* SceneKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SceneKit.framework; path = "System/Library/Frameworks/SceneKit.framework"; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -135,7 +135,7 @@
 				ASET /* Assets.xcassets */,
 				INF1 /* Info.plist */,
 			);
-			path = EnviroMap;
+			path = "EnviroMap";
 			sourceTree = "<group>";
 		};
 		G09 /* Frameworks */ = {
