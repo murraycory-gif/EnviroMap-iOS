@@ -22,19 +22,13 @@ struct FullEnvironmentScanView: View {
             Color(red: 0.06, green: 0.08, blue: 0.14).ignoresSafeArea()
 
             if let session = savedSessionForViewer {
-                NavigationStack {
-                    RoomViewerView(session: session)
-                        .environmentObject(store)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") {
-                                    model.stop()
-                                    dismiss()
-                                }
-                                .fontWeight(.bold)
-                            }
-                        }
-                }
+                // Real scan viewer only — Delete + Done are on this screen
+                RoomViewerView(session: session)
+                    .environmentObject(store)
+                    .onDisappear {
+                        model.stop()
+                        dismiss()
+                    }
             } else {
                 switch model.phase {
                 case .idle, .scanning, .failed:
@@ -50,6 +44,10 @@ struct FullEnvironmentScanView: View {
         }
         .onAppear {
             if name.isEmpty { name = defaultName() }
+            model.onExportReady = {
+                // Must hop to main; bake completion already on main
+                autoSaveAndOpenViewer()
+            }
             model.start()
         }
         .onDisappear { model.stop() }
@@ -567,6 +565,8 @@ final class FullEnvironmentScanModel: ObservableObject {
     @Published var bakeProgress: Double = 0
     @Published var bakeStatus: String = "Preparing…"
     @Published var exportReadyToken: Int = 0
+    /// Called on main when bake finishes — opens Rooms viewer (not black Review).
+    var onExportReady: (() -> Void)?
 
     let controller = FullEnvScanController()
 
@@ -641,11 +641,11 @@ final class FullEnvironmentScanModel: ObservableObject {
                     self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
                     self.previewScene = scene
                     self.bakeProgress = 0.97
-                    self.bakeStatus = "Saving to My Rooms…"
+                    self.bakeStatus = "Opening your scan…"
                     self.phase = .saving
                     self.controller.stop()
-                    // View listens to exportReadyToken and opens the real Rooms viewer
                     self.exportReadyToken += 1
+                    self.onExportReady?()
                 } else {
                     // Never silent-fail: show actionable error
                     let mc = self.meshChunks

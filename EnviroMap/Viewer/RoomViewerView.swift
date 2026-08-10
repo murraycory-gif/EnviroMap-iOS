@@ -13,6 +13,8 @@ struct RoomViewerView: View {
     @State private var loadError: String?
     @State private var showShare = false
     @State private var showQuickLook = false
+    @State private var confirmDelete = false
+    @Environment(\.dismiss) private var dismiss
 
     /// Prefer dense full-space mesh; fall back to RoomPlan structure.
     private var meshURL: URL {
@@ -33,24 +35,14 @@ struct RoomViewerView: View {
 
     var body: some View {
         ZStack {
-            // Black voids like 3D Snap — photo mesh reads clearer
-            LinearGradient(
-                colors: [
-                    Color.black,
-                    Color(red: 0.05, green: 0.06, blue: 0.09),
-                    Color.black,
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
             if let loadError {
                 VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 44))
                         .foregroundStyle(.orange)
-                    Text("Could not open mesh")
+                    Text("Could Not Open Scan")
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.white)
                     Text(loadError)
@@ -58,27 +50,18 @@ struct RoomViewerView: View {
                         .foregroundStyle(.white.opacity(0.75))
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 28)
-                    if fileExists {
-                        Button("Open in Quick Look") {
-                            showQuickLook = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(AppTheme.blue)
-                    }
                 }
             } else if !fileExists {
                 VStack(spacing: 16) {
                     Image(systemName: "cube.transparent")
                         .font(.system(size: 44))
                         .foregroundStyle(AppTheme.blue)
-                    Text("No USDZ file")
+                    Text("Scan File Missing")
                         .font(.title3.weight(.bold))
                         .foregroundStyle(.white)
-                    Text("This scan has no mesh on disk. Scan again and save.")
+                    Text("Scan Again And Save.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.75))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 28)
                 }
             } else {
                 MeshSceneView(
@@ -86,47 +69,87 @@ struct RoomViewerView: View {
                     isLoading: $isLoading,
                     loadError: $loadError
                 )
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea()
 
                 if isLoading {
-                    VStack(spacing: 14) {
-                        ProgressView()
-                            .tint(.white)
-                            .scaleEffect(1.2)
-                        Text("Loading 3D mesh…")
+                    VStack(spacing: 12) {
+                        ProgressView().tint(.white).scaleEffect(1.2)
+                        Text("Loading Scan…")
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.white.opacity(0.85))
                     }
-                    .padding(24)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
 
+            // Simple top chrome: Delete · Title · Done
             VStack {
-                Spacer()
-                infoBar
-            }
-        }
-        .navigationTitle(session.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: 12) {
-                    if fileExists {
-                        Button {
-                            showQuickLook = true
-                        } label: {
-                            Image(systemName: "eye")
-                        }
-                    }
                     Button {
-                        showShare = true
+                        confirmDelete = true
                     } label: {
-                        Image(systemName: "square.and.arrow.up")
+                        Image(systemName: "trash.fill")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.red.opacity(0.9), in: Circle())
                     }
-                    .disabled(!fileExists)
+                    .accessibilityLabel("Delete Scan")
+
+                    Spacer(minLength: 0)
+
+                    Text(session.name)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Done")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(AppTheme.blue, in: Capsule())
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+
+                Spacer()
+
+                // Simple how-to + status
+                if !isLoading, loadError == nil, fileExists {
+                    VStack(spacing: 8) {
+                        Text("Drag To Spin  ·  Pinch To Zoom")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                        Text(isDenseMesh ? "Full Color Scan" : "Structure Scan")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color.black.opacity(0.55), in: Capsule())
+                    .padding(.bottom, 28)
                 }
             }
+        }
+        .navigationBarHidden(true)
+        .preferredColorScheme(.dark)
+        .alert("Delete This Scan?", isPresented: $confirmDelete) {
+            Button("Delete", role: .destructive) {
+                store.delete(session)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This Cannot Be Undone.")
         }
         .sheet(isPresented: $showShare) {
             ShareSheet(items: store.shareItems(for: session))
@@ -135,28 +158,6 @@ struct RoomViewerView: View {
             QuickLookUSDZ(url: meshURL)
                 .ignoresSafeArea()
         }
-    }
-
-    private var infoBar: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                Text(isDenseMesh
-                     ? "Full Space Mesh · \(session.wallCount) walls · \(session.objectCount) objects"
-                     : "\(session.wallCount) walls · \(session.objectCount) objects · \(session.doorCount) doors")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.7))
-            }
-            Spacer()
-            Text(isDenseMesh ? "Full Color Mesh" : "Structure")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(isDenseMesh ? Color(red: 0.4, green: 0.9, blue: 0.7) : .white.opacity(0.7))
-        }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .padding()
     }
 }
 
@@ -196,21 +197,32 @@ struct MeshSceneView: UIViewRepresentable {
     final class Coordinator {
         /// Frame camera on the actual mesh so user sees the scan immediately (not empty sky).
         static func frameMesh(in view: SCNView, scene: SCNScene) {
+            // Ensure materials visible
+            scene.background.contents = UIColor.black
             PhotoTexturedMeshBuilder.normalizeForPreview(scene)
 
             let mesh = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
+
+            // World-space bounds of all geometry
             var minV = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
             var maxV = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
             var found = false
             func visit(_ n: SCNNode) {
                 if let g = n.geometry {
                     let (bmin, bmax) = g.boundingBox
-                    for c in [SCNVector3(bmin.x, bmin.y, bmin.z), SCNVector3(bmax.x, bmax.y, bmax.z),
-                              SCNVector3(bmin.x, bmax.y, bmin.z), SCNVector3(bmax.x, bmin.y, bmax.z)] {
+                    let corners: [SCNVector3] = [
+                        SCNVector3(bmin.x, bmin.y, bmin.z), SCNVector3(bmax.x, bmin.y, bmin.z),
+                        SCNVector3(bmin.x, bmax.y, bmin.z), SCNVector3(bmax.x, bmax.y, bmin.z),
+                        SCNVector3(bmin.x, bmin.y, bmax.z), SCNVector3(bmax.x, bmin.y, bmax.z),
+                        SCNVector3(bmin.x, bmax.y, bmax.z), SCNVector3(bmax.x, bmax.y, bmax.z),
+                    ]
+                    for c in corners {
                         let w = n.convertPosition(c, to: scene.rootNode)
-                        minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
-                        maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
-                        found = true
+                        if w.x.isFinite && w.y.isFinite && w.z.isFinite {
+                            minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
+                            maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
+                            found = true
+                        }
                     }
                 }
                 for c in n.childNodes { visit(c) }
@@ -218,40 +230,38 @@ struct MeshSceneView: UIViewRepresentable {
             visit(mesh)
             guard found else { return }
 
-            let center = SCNVector3(
-                (minV.x + maxV.x) * 0.5,
-                (minV.y + maxV.y) * 0.5,
-                (minV.z + maxV.z) * 0.5
-            )
-            var radius = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z)) * 0.5
-            radius = max(radius, 0.4)
-            let dist = radius * 2.4
+            let cx = (minV.x + maxV.x) * 0.5
+            let cy = (minV.y + maxV.y) * 0.5
+            let cz = (minV.z + maxV.z) * 0.5
+            let size = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z))
+            let radius = max(size * 0.5, 0.35)
+            let dist = radius * 2.6
 
+            // Clear cameras / look constraints
             scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
 
             let cam = SCNNode()
             cam.name = "previewCam"
             cam.camera = SCNCamera()
-            cam.camera?.fieldOfView = 50
+            cam.camera?.fieldOfView = 48
             cam.camera?.zNear = 0.01
-            cam.camera?.zFar = Double(max(120, radius * 40))
-            // Look slightly above center so car/floor sit in the lower 2/3 (natural)
-            cam.position = SCNVector3(center.x + dist * 0.55, center.y + dist * 0.35, center.z + dist * 0.9)
-            let look = SCNLookAtConstraint(target: mesh)
-            look.isGimbalLockEnabled = true
-            cam.constraints = [look]
+            cam.camera?.zFar = Double(max(150, radius * 50))
+            // 3/4 view centered on mesh
+            cam.position = SCNVector3(cx + dist * 0.65, cy + dist * 0.4, cz + dist)
+            cam.look(at: SCNVector3(cx, cy, cz))
             scene.rootNode.addChildNode(cam)
 
             view.pointOfView = cam
             view.defaultCameraController.pointOfView = cam
-            view.defaultCameraController.target = center
+            view.defaultCameraController.target = SCNVector3(cx, cy, cz)
             view.defaultCameraController.interactionMode = .orbitTurntable
+            view.defaultCameraController.inertiaEnabled = true
+            view.defaultCameraController.maximumVerticalAngle = 85
+            view.defaultCameraController.minimumVerticalAngle = -15
             view.allowsCameraControl = true
             view.autoenablesDefaultLighting = true
+            view.isPlaying = true
         }
-
-        weak var view: SCNView?
-        private var didLoad = false
 
         func load(url: URL, isLoading: Binding<Bool>, loadError: Binding<String?>) {
             guard !didLoad else { return }
