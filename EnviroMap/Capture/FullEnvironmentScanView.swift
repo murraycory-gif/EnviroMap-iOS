@@ -715,7 +715,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         scn.rendersCameraGrain = false
         scn.delegate = self
         // Yellow feature points + we'll add blue mesh lines for coverage
-        let blueOn = UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? true
+        let blueOn = UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? false
+        // Feature points only — light feedback without mesh rebuilds
         scn.debugOptions = blueOn ? [] : [.showFeaturePoints]
         view.addSubview(scn)
         arView = scn
@@ -729,13 +730,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         super.didReceiveMemoryWarning()
         stateLock.lock()
         // Emergency trim — keep newest half of keyframes + chunks
-        if keyframes.count > 12 {
-            keyframes = Array(keyframes.suffix(12))
+        if keyframes.count > 10 {
+            keyframes = Array(keyframes.suffix(10))
         }
-        if chunks.count > 400 {
+        if chunks.count > 280 {
             let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
             var keep: [UUID: CapturedMeshChunk] = [:]
-            for c in ranked.prefix(400) { keep[c.id] = c }
+            for c in ranked.prefix(280) { keep[c.id] = c }
             chunks = keep
         }
         stateLock.unlock()
@@ -851,29 +852,20 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
-        stateLock.lock()
-        let chunkCount = chunks.count
-        stateLock.unlock()
-        if chunkCount <= 45 {
-            applyBlueWire(node: node, mesh: mesh)
+        if showBlueMesh {
+            stateLock.lock()
+            let chunkCount = chunks.count
+            stateLock.unlock()
+            if chunkCount <= 30 {
+                applyBlueWire(node: node, mesh: mesh)
+            }
         }
-        noteClassification(from: mesh)
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+        // Never rebuild wire on updates — that was the freeze.
+        // Classification only, rarely.
         guard let mesh = anchor as? ARMeshAnchor else { return }
-        let now = CACurrentMediaTime()
-        // After enough mesh, stop rebuilding blue wire (was crashing ~40–80 frames)
-        stateLock.lock()
-        let chunkCount = chunks.count
-        stateLock.unlock()
-        if chunkCount > 45 {
-            // Keep existing wire; no rebuild
-            return
-        }
-        if let last = lastVizTime[mesh.identifier], now - last < 1.1 { return }
-        lastVizTime[mesh.identifier] = now
-        applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
     }
 
@@ -896,7 +888,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     /// Read AI prefs each session
     private var showBlueMesh: Bool {
-        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? true
+        // Default OFF — blue wire was a major freeze source. Settings can re-enable.
+        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? false
     }
     private var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
@@ -913,7 +906,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     private static func wireGeometry(_ mesh: ARMeshGeometry) -> SCNGeometry? {
         let vCount = mesh.vertices.count
-        guard vCount > 0, mesh.faces.count > 0, vCount < 120_000 else { return nil }
+        guard vCount > 0, mesh.faces.count > 0, vCount < 40_000 else { return nil }
         var positions = [Float](repeating: 0, count: vCount * 3)
         for i in 0..<vCount {
             let p = mesh.vertices.buffer.contents()
@@ -966,20 +959,18 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         guard isRunning else { return }
         let t = frame.timestamp
 
-        // ARMeshAnchor buffers are only valid in this callback — copy here, not async.
-        // Intervals are deliberately slower so the UI never freezes mid-scan.
-        if t - lastMeshCopyTime >= MeshDensityConfig.meshCopyInterval {
-            lastMeshCopyTime = t
-            autoreleasepool {
-                ingestMeshes(from: frame)
-            }
-        }
+        // One heavy job per tick max — mesh OR color, never both (smooth as silk)
+        let needMesh = t - lastMeshCopyTime >= MeshDensityConfig.meshCopyInterval
+        let needKF = t - lastKeyframeTime >= MeshDensityConfig.keyframeInterval
 
-        if t - lastKeyframeTime >= MeshDensityConfig.keyframeInterval {
+        if needMesh {
+            lastMeshCopyTime = t
+            autoreleasepool { ingestMeshes(from: frame) }
+            return
+        }
+        if needKF {
             lastKeyframeTime = t
-            autoreleasepool {
-                ingestKeyframe(from: frame)
-            }
+            autoreleasepool { ingestKeyframe(from: frame) }
         }
     }
 
@@ -1022,12 +1013,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         updateAICoach(meshCount: meshCount)
         emitStats(meshCount: meshCount, frameCount: frameCount)
         // Coverage markers only occasionally (main-ish SCN work)
-        // Coverage dots disabled under load — they added lag/crashes
-        if meshCount < 25, meshCount % 8 == 0 {
-            DispatchQueue.main.async { [weak self] in
-                self?.updateCoverageMarkersIfNeeded()
-            }
-        }
+        // No coverage SCN markers — smoothness first
+
     }
 
     private func updateAICoach(meshCount: Int) {
@@ -1129,7 +1116,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     private func emitStats(meshCount: Int, frameCount: Int) {
         let now = CACurrentMediaTime()
-        if now - lastStatsEmit < 0.45 { return }
+        if now - lastStatsEmit < 0.6 { return }
         lastStatsEmit = now
         DispatchQueue.main.async { [weak self] in
             self?.onStats?(meshCount, frameCount)
@@ -1141,7 +1128,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private func noteClassification(from mesh: ARMeshAnchor) {
         guard aiCoachEnabled else { return }
         let now = CACurrentMediaTime()
-        if now - lastClassNoteTime < 0.8 { return }
+        if now - lastClassNoteTime < 1.5 { return }
         lastClassNoteTime = now
         // ARMeshClassification via geometry if available (iOS 14+)
         let g = mesh.geometry

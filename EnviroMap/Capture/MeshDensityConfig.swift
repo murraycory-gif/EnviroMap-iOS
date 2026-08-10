@@ -1,55 +1,46 @@
 import Foundation
 
-/// Live scan is LIGHT (no freezes). Quality comes from good coverage + bake.
+/// Butter-smooth live scan. Quality is rebuilt on Done, not during walk.
 enum MeshDensityConfig {
     static var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
     }
 
-    // MARK: Live — hard caps so iPhone never OOM mid-scan
+    // MARK: Live — baby-smooth (lowest sustained load)
 
-    /// Mesh snapshot rate (seconds)
-    static var meshCopyInterval: TimeInterval { 0.28 }
-
-    /// Color frame rate (seconds) — RGB convert is expensive
-    static var keyframeInterval: TimeInterval { 0.30 }
-
-    /// Hard cap — more than ~36 full RGB frames risks crash
-    static var maxKeyframes: Int { highDetail ? 36 : 28 }
-
-    static var maxChunks: Int { highDetail ? 900 : 600 }
-
-    /// Live RGB width — 360 is sharp enough after bake upscale feel
-    static var keyframeMaxWidth: Int { highDetail ? 400 : 320 }
-
-    static var liveVertexSoftCap: Int { 40_000 }
+    static var meshCopyInterval: TimeInterval { 0.40 }   // ~2.5x/sec max
+    static var keyframeInterval: TimeInterval { 0.45 }   // ~2x/sec max
+    static var maxKeyframes: Int { 24 }                  // hard RAM ceiling
+    static var maxChunks: Int { 500 }
+    static var keyframeMaxWidth: Int { 288 }             // tiny RGB buffers
+    static var liveVertexSoftCap: Int { 28_000 }
 
     static func liveVertexStep(vCount: Int) -> Int {
-        if vCount > 50_000 { return 3 }
-        if vCount > 25_000 { return 2 }
+        if vCount > 40_000 { return 4 }
+        if vCount > 20_000 { return 3 }
+        if vCount > 10_000 { return 2 }
         return 1
     }
 
     static func liveFaceStep(faceCount: Int) -> Int {
-        if faceCount > 35_000 { return 3 }
-        if faceCount > 18_000 { return 2 }
+        if faceCount > 25_000 { return 4 }
+        if faceCount > 12_000 { return 3 }
+        if faceCount > 6_000 { return 2 }
         return 1
     }
 
-    /// Final harvest on Done can keep denser geometry
-    static var finalVertexSoftCap: Int { highDetail ? 160_000 : 100_000 }
+    // MARK: Done harvest — denser only when finishing
 
-    // MARK: Bake
-
-    static var triangleBudget: Int { highDetail ? 220_000 : 140_000 }
-    static var bakeKeyframeLimit: Int { highDetail ? 36 : 28 }
+    static var finalVertexSoftCap: Int { highDetail ? 180_000 : 120_000 }
+    static var triangleBudget: Int { highDetail ? 200_000 : 120_000 }
+    static var bakeKeyframeLimit: Int { 24 }
     static var samplesPerTriangle: Int { 3 }
     static var quantizeShift: Int { 3 }
 
+    /// Blue wire is optional visual sugar — keep cheap or off
     static func blueWireFaceStep(faceCount: Int) -> Int {
-        if faceCount > 6_000 { return 8 }
-        if faceCount > 2_500 { return 6 }
-        if faceCount > 1_000 { return 4 }
-        return 3
+        if faceCount > 4_000 { return 10 }
+        if faceCount > 1_500 { return 7 }
+        return 5
     }
 }

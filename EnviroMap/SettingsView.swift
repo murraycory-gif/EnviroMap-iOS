@@ -4,7 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("enviromap.ai.improveTools") private var improveAI = true
-    @AppStorage("enviromap.scan.showBlueMesh") private var showBlueMesh = true
+    @AppStorage("enviromap.scan.showBlueMesh") private var showBlueMesh = false
     @AppStorage("enviromap.scan.highDetail") private var highDetail = true
     @AppStorage("enviromap.scan.aiCoach") private var aiCoach = true
 
@@ -75,7 +75,7 @@ struct SettingsView: View {
                         settingsCard {
                             toggleRow(
                                 icon: "lines.measurement.horizontal",
-                                title: "Blue Mapping Mesh",
+                                title: "Blue Mapping Lines",
                                 subtitle: "Live wireframe while scanning",
                                 isOn: $showBlueMesh
                             )
