@@ -14,7 +14,7 @@ enum MeshDensityConfig {
     static var maxKeyframes: Int { 110 }
     static var maxChunks: Int { 9000 }
     /// Higher res keyframes = clearer surfaces
-    static var keyframeMaxWidth: Int { 1280 }
+    static var keyframeMaxWidth: Int { 1152 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }
     static var meshCopyInterval: TimeInterval { 999 }
@@ -26,7 +26,7 @@ enum MeshDensityConfig {
     static var finalVertexSoftCap: Int { 2_500_000 }
     /// More triangles kept = denser coverage / fewer holes
     static var triangleBudget: Int { highDetail ? 750_000 : 450_000 }
-    static var bakeKeyframeLimit: Int { 72 }
+    static var bakeKeyframeLimit: Int { 80 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 

@@ -212,41 +212,8 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Photo texture when projection is CLEAN (sharp like a photo)
-                if !colorBudgetExhausted,
-                   texTris < 120_000,
-                   let pick = bestProjection(world: mid, normal: nMid, keyframes: kfs),
-                   pick.score > 0.42,
-                   kiOk(pick.index),
-                   let uv0 = projectUV(world: w0, kf: kfs[pick.index]),
-                   let uv1 = projectUV(world: w1, kf: kfs[pick.index]),
-                   let uv2 = projectUV(world: w2, kf: kfs[pick.index]) {
-                    let e01 = simd_length(uv1 - uv0)
-                    let e12 = simd_length(uv2 - uv1)
-                    let e20 = simd_length(uv0 - uv2)
-                    let maxEdge = max(e01, max(e12, e20))
-                    let uvArea = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y))
-                    // Reject stretch / tiny / huge UV (warp = blur)
-                    if uvArea > 2e-5, maxEdge > 0.004, maxEdge < 0.35 {
-                        let ki = pick.index
-                        func pushT(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
-                            texPos[ki].append(contentsOf: [w.x, w.y, w.z])
-                            texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
-                            texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
-                            let id = texBase[ki]
-                            texBase[ki] += 1
-                            return id
-                        }
-                        texIdx[ki].append(contentsOf: [
-                            pushT(w0, n0, uv0), pushT(w1, n1, uv1), pushT(w2, n2, uv2)
-                        ])
-                        texTris += 1
-                        triUsed += 1
-                        continue
-                    }
-                }
-
-                // Vertex color (fallback / sides / thin bits)
+                // Photo UV disabled (caused white wash + warp). Solid camera colors only.
+                // Vertex color path
                 func emit(_ i: Int) -> UInt32 {
                     if let e = remap[i] { return e }
                     let w = worldP(i)
@@ -264,7 +231,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.11, triUsed < triBudget {
+                if edge > 0.09, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -342,13 +309,7 @@ enum PhotoTexturedMeshBuilder {
             root.addChildNode(node)
         }
 
-        // Solid depth patches fill black holes (quads, not grainy points)
-        if !depthPoints.isEmpty {
-            progressHandler?(0.9, "Filling Gaps…")
-            if let fill = makeDepthFillQuads(depthPoints, meshPositions: allPos) {
-                root.addChildNode(fill)
-            }
-        }
+        // Depth used only for color samples (nearestDepthColor) — no grainy quads in viewer
         progressHandler?(0.92, "Polishing…")
 
         guard !root.childNodes.isEmpty else {
@@ -511,14 +472,16 @@ enum PhotoTexturedMeshBuilder {
             let center = cx * cy
             let frameQ = frameExposureQuality(kf.meanLuma)
             let frameBoost: Float = 0.75 + 0.25 * frameQ
-            let distTerm: Float = 1.0 / max(dist, 0.2)
-            let centerTerm: Float = 0.35 + 0.65 * center
-            let w = Float(facing) * distTerm * centerTerm * expQ * frameBoost
+            // Closer + more head-on = sharper real color
+            let distTerm: Float = 1.0 / max(dist * dist, 0.08)
+            let centerTerm: Float = 0.25 + 0.75 * center
+            let faceBoost = Float(facing * facing)
+            let w = faceBoost * distTerm * centerTerm * expQ * frameBoost
             if w > bestW {
                 bestW = w
                 bestC = c
                 bestLuma = kf.meanLuma
-                if w > 3.5 { break }
+                if w > 4.5 { break }
             }
         }
         if let c = bestC {
@@ -764,37 +727,37 @@ enum PhotoTexturedMeshBuilder {
         _ c: (UInt8, UInt8, UInt8),
         sceneLuma: Float
     ) -> (UInt8, UInt8, UInt8) {
-        // Keep colors close to the real camera — clarity > heavy filters
+        // Real camera color with readable pop (bins, cars, walls stay distinct)
         var r = Float(c.0) / 255.0
         var g = Float(c.1) / 255.0
         var bl = Float(c.2) / 255.0
         let y = (r + g + bl) / 3.0
 
-        if sceneLuma < 0.28 || y < 0.22 {
-            let lift: Float = 0.07
+        if sceneLuma < 0.32 || y < 0.25 {
+            let lift: Float = 0.10
             r = min(1.0, r + lift * (1.0 - r))
             g = min(1.0, g + lift * (1.0 - g))
             bl = min(1.0, bl + lift * (1.0 - bl))
-        } else if sceneLuma > 0.78 || y > 0.88 {
+        } else if sceneLuma > 0.75 || y > 0.85 {
             r = softHighlight(r)
             g = softHighlight(g)
             bl = softHighlight(bl)
         }
 
-        // Light clarity only
         let mid = (r + g + bl) / 3.0
-        let contrast: Float = 1.18
+        let contrast: Float = 1.22
         r = clamp01(mid + (r - mid) * contrast)
         g = clamp01(mid + (g - mid) * contrast)
         bl = clamp01(mid + (bl - mid) * contrast)
 
         let avg = (r + g + bl) / 3.0
-        let sat: Float = 1.16
+        let sat: Float = 1.22
         r = clamp01(avg + (r - avg) * sat)
         g = clamp01(avg + (g - avg) * sat)
         bl = clamp01(avg + (bl - avg) * sat)
 
-        let floor: Float = 0.04
+        // Keep darks visible on black background without milky wash
+        let floor: Float = 0.05
         r = max(r, floor)
         g = max(g, floor)
         bl = max(bl, floor)
