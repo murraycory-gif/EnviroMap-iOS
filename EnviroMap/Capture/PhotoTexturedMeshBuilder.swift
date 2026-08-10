@@ -174,7 +174,15 @@ enum PhotoTexturedMeshBuilder {
             func colorAt(_ i: Int) -> (UInt8, UInt8, UInt8) {
                 if let c = colorCache[i] { return c }
                 let c: (UInt8, UInt8, UInt8)
-                if colorBudgetExhausted {
+                // Depth-fused chunks already carry camera colors
+                if let cols = chunk.colors, i < cols.count {
+                    let v = cols[i]
+                    c = (
+                        UInt8(min(255, max(0, v.x * 255))),
+                        UInt8(min(255, max(0, v.y * 255))),
+                        UInt8(min(255, max(0, v.z * 255)))
+                    )
+                } else if colorBudgetExhausted {
                     c = Self.visibleGray
                 } else {
                     c = fastColor(world: worldP(i), normal: worldN(i), keyframes: kfs)

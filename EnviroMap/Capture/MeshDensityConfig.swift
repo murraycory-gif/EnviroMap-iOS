@@ -27,7 +27,7 @@ enum MeshDensityConfig {
     static func liveFaceStep(faceCount: Int) -> Int { 1 }
 
     static var finalVertexSoftCap: Int { 3_500_000 }
-    static var triangleBudget: Int { highDetail ? 1_200_000 : 700_000 }
+    static var triangleBudget: Int { highDetail ? 1_400_000 : 800_000 }
     static var bakeKeyframeLimit: Int { 96 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
@@ -36,7 +36,7 @@ enum MeshDensityConfig {
     static var meshBankInterval: TimeInterval { 999 }
     static var meshBankTilesPerTick: Int { 32 }
 
-    static var depthSampleStep: Int { 5 }
+    static var depthSampleStep: Int { 4 }
     static var depthIngestInterval: TimeInterval { 0.55 }
 
     static func blueWireFaceStep(faceCount: Int) -> Int {

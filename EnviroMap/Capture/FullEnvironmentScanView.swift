@@ -888,23 +888,32 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             var all = chunks
             stateLock.unlock()
 
-            // Finish HEAVY: max coverage — many full pulls while ARKit densifies
-            for pass in 0..<10 {
+            // Finish HEAVY: mesh densify + depth-mesh fusion (fills ARKit holes)
+            for pass in 0..<14 {
                 if let frame = session.currentFrame {
                     ingestKeyframe(from: frame, highRes: true)
                     merge(&all, pull(from: frame))
-                    if pass == 0 || pass == 4 || pass == 9 {
-                        ingestDepthPoints(from: frame)
+                    // Dense depth every pass + turn depth maps into real mesh tiles
+                    ingestDepthPoints(from: frame, dense: true)
+                    // Depth-mesh fusion every 3rd pass (fills holes without freezing)
+                    if pass % 3 == 0 {
+                        if let depthChunk = Self.depthFrameToMeshChunk(frame, tag: pass) {
+                            all[depthChunk.id] = depthChunk
+                        }
                     }
                 }
-                if pass < 9 {
-                    Thread.sleep(forTimeInterval: 0.20)
+                if pass < 13 {
+                    Thread.sleep(forTimeInterval: 0.18)
                 }
             }
-            // Final all-tile pull (full quality, no live thin)
+            // Final full-quality pull of every ARKit tile
             if let frame = session.currentFrame {
                 merge(&all, pull(from: frame))
                 ingestKeyframe(from: frame, highRes: true)
+                ingestDepthPoints(from: frame, dense: true)
+                if let depthChunk = Self.depthFrameToMeshChunk(frame, tag: 99) {
+                    all[depthChunk.id] = depthChunk
+                }
             }
 
             stateLock.lock()
@@ -1336,7 +1345,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     /// Sample scene depth + camera color into a voxel grid (fills mesh holes)
-    private func ingestDepthPoints(from frame: ARFrame) {
+    private func ingestDepthPoints(from frame: ARFrame, dense: Bool = false) {
         guard let depthMap = frame.sceneDepth?.depthMap else { return }
         let cam = frame.camera
         let orientation = arView?.window?.windowScene?.interfaceOrientation ?? .portrait
@@ -1351,8 +1360,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
               let dBase = CVPixelBufferGetBaseAddress(depthMap) else { return }
         let dStride = CVPixelBufferGetBytesPerRow(depthMap)
 
-        // Sparse sample for speed/memory (~every 6th pixel)
-        let step = MeshDensityConfig.depthSampleStep
+        // Finish uses denser sampling → more hole fill
+        let step = dense ? max(2, MeshDensityConfig.depthSampleStep - 2) : MeshDensityConfig.depthSampleStep
         var local: [UInt64: ColoredDepthPoint] = [:]
         local.reserveCapacity((dw / step) * (dh / step) / 2)
 
@@ -1411,9 +1420,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 )
 
                 // Voxel key ~3cm
-                let vx = Int32((world.x * 33).rounded())
-                let vy = Int32((world.y * 33).rounded())
-                let vz = Int32((world.z * 33).rounded())
+                let vx = Int32((world.x * 40).rounded())
+                let vy = Int32((world.y * 40).rounded())
+                let vz = Int32((world.z * 40).rounded())
                 let key = (UInt64(bitPattern: Int64(vx)) & 0x1FFFFF)
                     | ((UInt64(bitPattern: Int64(vy)) & 0x1FFFFF) << 21)
                     | ((UInt64(bitPattern: Int64(vz)) & 0x1FFFFF) << 42)
@@ -1433,12 +1442,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             depthPoints[k] = p
         }
         // Cap memory ~120k points
-        if depthPoints.count > 160_000 {
+        if depthPoints.count > 220_000 {
             // Drop random half of oldest by rebuilding from suffix of keys
             let keys = Array(depthPoints.keys)
             var keep: [UInt64: ColoredDepthPoint] = [:]
-            keep.reserveCapacity(110_000)
-            for k in keys.suffix(110_000) {
+            keep.reserveCapacity(160_000)
+            for k in keys.suffix(160_000) {
                 if let p = depthPoints[k] { keep[k] = p }
             }
             depthPoints = keep
