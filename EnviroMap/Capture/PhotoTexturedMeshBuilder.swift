@@ -34,7 +34,7 @@ enum PhotoTexturedMeshBuilder {
     static var progressHandler: ((Double, String) -> Void)?
 
     /// Hard ceiling so bake never hangs on phone
-    private static let bakeDeadlineSeconds: CFTimeInterval = 32
+    private static let bakeDeadlineSeconds: CFTimeInterval = 48
     /// Depth colors for hole fill (set only during buildScene)
     private static var bakeDepthSamples: [(SIMD3<Float>, SIMD3<Float>)] = []
 
@@ -107,7 +107,7 @@ enum PhotoTexturedMeshBuilder {
         let photos: [UIImage?] = kfs.map { imageFromRGB($0.rgb, width: $0.rgbWidth, height: $0.rgbHeight) }
 
         let scene = SCNScene()
-        scene.background.contents = UIColor.black
+        scene.background.contents = UIColor(white: 0.08, alpha: 1)
         let root = SCNNode()
         root.name = "coloredMesh"
 
@@ -138,13 +138,11 @@ enum PhotoTexturedMeshBuilder {
         let ordered = chunks.sorted { $0.positions.count < $1.positions.count }
 
         for (ci, chunk) in ordered.enumerated() {
-            if timedOut() {
-                progressHandler?(0.75, "Finishing Early…")
-                break
-            }
+            // NEVER skip chunks — timeout only skips expensive coloring
+            let colorBudgetExhausted = timedOut()
             if ci % 2 == 0 {
-                let p = 0.08 + 0.60 * Double(ci) / Double(total)
-                progressHandler?(min(p, 0.68), "Coloring Surfaces…")
+                let p = 0.08 + 0.70 * Double(ci) / Double(total)
+                progressHandler?(min(p, 0.82), colorBudgetExhausted ? "Finishing Mesh…" : "Coloring Surfaces…")
             }
 
             let vCount = chunk.positions.count
@@ -170,7 +168,7 @@ enum PhotoTexturedMeshBuilder {
             var colorCache = [Int: (UInt8, UInt8, UInt8)]()
             func colorAt(_ i: Int) -> (UInt8, UInt8, UInt8) {
                 if let c = colorCache[i] { return c }
-                let c = fastColor(world: worldP(i), normal: worldN(i), keyframes: kfs)
+                let c = colorBudgetExhausted ? visibleGray : fastColor(world: worldP(i), normal: worldN(i), keyframes: kfs)
                 colorCache[i] = c
                 // Keep sparse fill samples
                 if fillSamples.count < 800, colorCache.count % 12 == 0 {
@@ -184,14 +182,13 @@ enum PhotoTexturedMeshBuilder {
 
             // Prefer every triangle — only thin extreme tiles (holes > speed)
             var triStep = 1
-            if triCount > 160_000 { triStep = 2 }
-            if triUsed > triBudget { triStep = 2 }
+            // Prefer density — only thin absurd tiles
+            if triCount > 250_000 { triStep = 2 }
+            if triUsed > triBudget * 2 { triStep = 2 }
 
             var remap = [Int: UInt32]()
 
             for ti in stride(from: 0, to: triCount, by: triStep) {
-                if ti & 0x3FF == 0, timedOut() { break }
-
                 let i0 = Int(chunk.indices[ti * 3])
                 let i1 = Int(chunk.indices[ti * 3 + 1])
                 let i2 = Int(chunk.indices[ti * 3 + 2])
@@ -233,7 +230,7 @@ enum PhotoTexturedMeshBuilder {
                     let nm12 = simd_normalize(n1 + n2)
                     let nm20 = simd_normalize(n2 + n0)
                     func emitMid(_ w: SIMD3<Float>, _ n: SIMD3<Float>) -> UInt32 {
-                        let c = fastColor(world: w, normal: n, keyframes: kfs)
+                        let c = colorBudgetExhausted ? visibleGray : fastColor(world: w, normal: n, keyframes: kfs)
                         allPos.append(contentsOf: [w.x, w.y, w.z])
                         allNrm.append(contentsOf: [n.x, n.y, n.z])
                         allCol.append(contentsOf: [
@@ -329,7 +326,7 @@ enum PhotoTexturedMeshBuilder {
         normal: SIMD3<Float>,
         keyframes: [Keyframe]
     ) -> (UInt8, UInt8, UInt8) {
-        guard !keyframes.isEmpty else { return (175, 178, 182) }
+        guard !keyframes.isEmpty else { return visibleGray }
 
         var bestW: Float = -1
         var bestC: (UInt8, UInt8, UInt8)?
@@ -369,22 +366,20 @@ enum PhotoTexturedMeshBuilder {
         if let dc = nearestDepthColor(world) {
             return adaptiveEnhance(dc, sceneLuma: 0.45)
         }
-        return (170, 172, 176)
+        return visibleGray
     }
 
     /// 0...1 — how usable is this pixel (reject crushed blacks / blown highlights)
     private static func sampleExposureQuality(_ c: (UInt8, UInt8, UInt8)) -> Float {
         let y = (Float(c.0) + Float(c.1) + Float(c.2)) / (3 * 255)
-        let sat = (max(c.0, max(c.1, c.2)) - min(c.0, min(c.1, c.2)))
-        // Blown white with no chroma
-        if y > 0.97, sat < 12 { return 0.05 }
-        // Crushed black
-        if y < 0.04 { return 0.08 }
-        if y < 0.12 { return 0.45 }
-        if y > 0.92 { return 0.5 }
-        // Sweet spot
-        if y > 0.18, y < 0.85 { return 1.0 }
-        return 0.75
+        let sat = Float(max(c.0, max(c.1, c.2)) - min(c.0, min(c.1, c.2)))
+        // Only reject pure blown white
+        if y > 0.985, sat < 8 { return 0.15 }
+        // Keep dark samples — coverage > perfect exposure
+        if y < 0.03 { return 0.35 }
+        if y < 0.12 { return 0.7 }
+        if y > 0.18, y < 0.88 { return 1.0 }
+        return 0.85
     }
 
     private static func frameExposureQuality(_ meanLuma: Float) -> Float {
@@ -625,15 +620,18 @@ enum PhotoTexturedMeshBuilder {
 
         // Clarity: mild contrast + saturation
         let mid = (r + g + b) / 3
-        let contrast: Float = 1.16
+        let contrast: Float = 1.12
         r = min(1, max(0, mid + (r - mid) * contrast))
         g = min(1, max(0, mid + (g - mid) * contrast))
         b = min(1, max(0, mid + (b - mid) * contrast))
         let avg = (r + g + b) / 3
-        let sat: Float = 1.14
+        let sat: Float = 1.12
         r = min(1, max(0, avg + (r - avg) * sat))
         g = min(1, max(0, avg + (g - avg) * sat))
         b = min(1, max(0, avg + (b - avg) * sat))
+        // Floor — never pure black (vanishes on dark background)
+        let floor: Float = 0.12
+        r = max(r, floor); g = max(g, floor); b = max(b, floor)
         return (UInt8(r * 255), UInt8(g * 255), UInt8(b * 255))
     }
 
@@ -721,7 +719,7 @@ enum PhotoTexturedMeshBuilder {
             scene.rootNode.addChildNode(amb)
         }
 
-        scene.background.contents = UIColor.black
+        scene.background.contents = UIColor(white: 0.08, alpha: 1)
         if scene.rootNode.childNode(withName: "enviromap.normalized.flag", recursively: false) == nil {
             let flag = SCNNode()
             flag.name = "enviromap.normalized.flag"

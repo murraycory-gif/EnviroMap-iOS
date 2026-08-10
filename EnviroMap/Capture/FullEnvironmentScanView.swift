@@ -727,6 +727,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastDepthTime: TimeInterval = 0
     private var meshBankBusy = false
     private var depthBusy = false
+    private var lastBankIdTime: [UUID: TimeInterval] = [:]
     private var lastCamPos: SIMD3<Float>?
     private var lastStatsEmit: TimeInterval = 0
     private var maxKeyframes: Int { MeshDensityConfig.maxKeyframes }
@@ -768,10 +769,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         if keyframes.count > 10 {
             keyframes = Array(keyframes.suffix(10))
         }
-        if chunks.count > 280 {
+        if chunks.count > 800 {
             let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
             var keep: [UUID: CapturedMeshChunk] = [:]
-            for c in ranked.prefix(280) { keep[c.id] = c }
+            for c in ranked.prefix(500) { keep[c.id] = c }
             chunks = keep
         }
         stateLock.unlock()
@@ -788,6 +789,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         chunks.removeAll()
         keyframes.removeAll()
         depthPoints.removeAll()
+        lastBankIdTime.removeAll()
         lastKeyframeTime = 0
         lastMeshCopyTime = 0
         lastDepthTime = 0
@@ -847,8 +849,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         func pull(from frame: ARFrame) -> [UUID: CapturedMeshChunk] {
             var fresh: [UUID: CapturedMeshChunk] = [:]
+            // EVERY mesh anchor — no tile cap on Finish
             for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
-                if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
+                if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
                     fresh[chunk.id] = chunk
                 }
             }
@@ -867,27 +870,22 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         autoreleasepool {
-            // Start from densest bank collected during the walk
             stateLock.lock()
             var all = chunks
             stateLock.unlock()
 
-            if let frame = session.currentFrame {
-                ingestKeyframe(from: frame)
-                merge(&all, pull(from: frame))
-                ingestDepthPoints(from: frame) // final dense depth
-            }
-            Thread.sleep(forTimeInterval: 0.2)
-            if let frame = session.currentFrame {
-                ingestKeyframe(from: frame)
-                merge(&all, pull(from: frame))
-                ingestDepthPoints(from: frame)
-            }
-            Thread.sleep(forTimeInterval: 0.2)
-            if let frame = session.currentFrame {
-                ingestKeyframe(from: frame)
-                merge(&all, pull(from: frame))
-                ingestDepthPoints(from: frame)
+            // 4 densify passes — ARKit fills gaps when phone is still
+            for pass in 0..<4 {
+                if let frame = session.currentFrame {
+                    ingestKeyframe(from: frame)
+                    merge(&all, pull(from: frame))
+                    if pass == 0 || pass == 3 {
+                        ingestDepthPoints(from: frame)
+                    }
+                }
+                if pass < 3 {
+                    Thread.sleep(forTimeInterval: 0.28)
+                }
             }
 
             stateLock.lock()
@@ -897,7 +895,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             let faces = chunks.values.reduce(0) { $0 + $1.indices.count / 3 }
             let dps = depthPoints.count
             stateLock.unlock()
-            print("[EnviroMap] DENSE+BANK harvest chunks=\(total) verts=\(verts) faces=\(faces) depthPts=\(dps)")
+            print("[EnviroMap] FULL harvest chunks=\(total) verts=\(verts) faces=\(faces) depthPts=\(dps)")
         }
     }
 
@@ -1079,19 +1077,24 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             autoreleasepool { ingestKeyframe(from: frame) }
         }
 
-        // DENSEST-MESH bank — sync copy only (ARMesh buffers invalid after callback)
+        // DENSEST-MESH bank — copy ALL current tiles (sync; buffers only valid here)
+        // Soft time budget: if many tiles, still cycle through over successive ticks
         if ts - lastMeshCopyTime >= MeshDensityConfig.meshBankInterval, !meshBankBusy {
             lastMeshCopyTime = ts
             meshBankBusy = true
             let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            let tileN = MeshDensityConfig.meshBankTilesPerTick
             var copied: [CapturedMeshChunk] = []
-            copied.reserveCapacity(min(meshes.count, tileN))
-            let ranked = meshes.sorted {
-                $0.geometry.vertices.count > $1.geometry.vertices.count
+            copied.reserveCapacity(meshes.count)
+            // Round-robin: don't always only take the 12 biggest (that starved walls/floors)
+            let sorted = meshes.sorted { $0.identifier.uuidString < $1.identifier.uuidString }
+            let start = Int(ts * 10) % max(sorted.count, 1)
+            var ordered: [ARMeshAnchor] = []
+            if !sorted.isEmpty {
+                ordered = Array(sorted[start...]) + Array(sorted[..<start])
             }
+            let limit = min(ordered.count, MeshDensityConfig.meshBankTilesPerTick)
             autoreleasepool {
-                for mesh in ranked.prefix(tileN) {
+                for mesh in ordered.prefix(limit) {
                     if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: true) {
                         copied.append(chunk)
                     }
@@ -1439,9 +1442,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // liveBank: keep most detail but soft-cap huge tiles so mid-scan never freezes
         let step: Int
         if liveBank {
-            step = vCount > 55_000 ? 2 : 1
+            step = vCount > 80_000 ? 2 : 1
         } else if fullQuality {
-            step = 1  // finish harvest — keep every vertex
+            step = 1
         } else {
             step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }

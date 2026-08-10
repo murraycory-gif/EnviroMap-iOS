@@ -25,14 +25,14 @@ enum MeshDensityConfig {
 
     static var finalVertexSoftCap: Int { 2_500_000 }
     /// More triangles kept = denser coverage / fewer holes
-    static var triangleBudget: Int { highDetail ? 560_000 : 360_000 }
+    static var triangleBudget: Int { highDetail ? 750_000 : 450_000 }
     static var bakeKeyframeLimit: Int { 52 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 
     /// Live mesh bank: how often / how many tiles (safe, sync copy)
-    static var meshBankInterval: TimeInterval { 0.75 }
-    static var meshBankTilesPerTick: Int { 12 }
+    static var meshBankInterval: TimeInterval { 0.55 }
+    static var meshBankTilesPerTick: Int { 24 }
 
     /// Depth hole-fill sample density (lower step = denser)
     static var depthSampleStep: Int { 5 }
