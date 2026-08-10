@@ -680,7 +680,7 @@ final class FullEnvironmentScanModel: ObservableObject {
     }
 
     @Published var phase: Phase = .idle
-    @Published var instruction = "Move slowly. Cover everything you want in 3D."
+    @Published var instruction = "Move slowly · cover every side"
     @Published var statusTitle = "Full 3D Scan"
     @Published var detailLine = "LiDAR + real colors"
     @Published var meshChunks = 0
@@ -706,7 +706,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Walk around every object · blue mesh must cover cars & furniture fully"
+        instruction = "Move slowly · cover every side"
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
