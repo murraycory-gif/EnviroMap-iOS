@@ -93,9 +93,9 @@ enum PhotoTexturedMeshBuilder {
         if depthPoints.isEmpty {
             bakeDepthSamples = []
         } else {
-            let step = max(1, depthPoints.count / 12_000)
+            let step = max(1, depthPoints.count / 25_000)
             var samples: [(SIMD3<Float>, SIMD3<Float>)] = []
-            samples.reserveCapacity(min(12_000, depthPoints.count))
+            samples.reserveCapacity(min(25_000, depthPoints.count))
             var i = 0
             while i < depthPoints.count {
                 let p = depthPoints[i]
@@ -229,7 +229,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.22, triUsed < triBudget {
+                if edge > 0.16, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -305,8 +305,14 @@ enum PhotoTexturedMeshBuilder {
             root.addChildNode(node)
         }
 
-        // Depth is used only as color samples (see colorAt) — never as grainy points
-        progressHandler?(0.9, "Polishing…")
+        // Solid depth patches fill black holes (quads, not grainy points)
+        if !depthPoints.isEmpty {
+            progressHandler?(0.9, "Filling Gaps…")
+            if let fill = makeDepthFillQuads(depthPoints) {
+                root.addChildNode(fill)
+            }
+        }
+        progressHandler?(0.92, "Polishing…")
 
         guard !root.childNodes.isEmpty else {
             progressHandler?(1, "No Mesh")
@@ -372,7 +378,7 @@ enum PhotoTexturedMeshBuilder {
                 bestW = w
                 bestC = c
                 bestLuma = kf.meanLuma
-                if w > 2.2 { break }
+                if w > 3.5 { break }
             }
         }
         if let c = bestC {
@@ -411,7 +417,7 @@ enum PhotoTexturedMeshBuilder {
     private static func nearestDepthColor(_ world: SIMD3<Float>) -> (UInt8, UInt8, UInt8)? {
         let samples = bakeDepthSamples
         guard !samples.isEmpty else { return nil }
-        var bestD: Float = 0.12 * 0.12  // 12cm
+        var bestD: Float = 0.18 * 0.18  // 18cm
         var best: SIMD3<Float>?
         // Small search — samples already capped
         for (sp, sc) in samples {
@@ -645,10 +651,18 @@ enum PhotoTexturedMeshBuilder {
         g = clamp01(avg + (g - avg) * sat)
         bl = clamp01(avg + (bl - avg) * sat)
 
-        let floor: Float = 0.12
+        // Soft floor so dark areas stay visible but not milky
+        let floor: Float = 0.06
         r = max(r, floor)
         g = max(g, floor)
         bl = max(bl, floor)
+
+        // Micro contrast for clearer edges
+        let mid2 = (r + g + bl) / 3.0
+        let sharp: Float = 1.08
+        r = clamp01(mid2 + (r - mid2) * sharp)
+        g = clamp01(mid2 + (g - mid2) * sharp)
+        bl = clamp01(mid2 + (bl - mid2) * sharp)
 
         let ru = UInt8(r * 255.0)
         let gu = UInt8(g * 255.0)

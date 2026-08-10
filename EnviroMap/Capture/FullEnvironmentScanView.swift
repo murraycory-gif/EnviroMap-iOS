@@ -1435,12 +1435,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             depthPoints[k] = p
         }
         // Cap memory ~120k points
-        if depthPoints.count > 100_000 {
+        if depthPoints.count > 160_000 {
             // Drop random half of oldest by rebuilding from suffix of keys
             let keys = Array(depthPoints.keys)
             var keep: [UInt64: ColoredDepthPoint] = [:]
-            keep.reserveCapacity(70_000)
-            for k in keys.suffix(70_000) {
+            keep.reserveCapacity(110_000)
+            for k in keys.suffix(110_000) {
                 if let p = depthPoints[k] { keep[k] = p }
             }
             depthPoints = keep

@@ -14,7 +14,7 @@ enum MeshDensityConfig {
     static var maxKeyframes: Int { 110 }
     static var maxChunks: Int { 9000 }
     /// Higher res keyframes = clearer surfaces
-    static var keyframeMaxWidth: Int { 960 }
+    static var keyframeMaxWidth: Int { 1024 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }
     static var meshCopyInterval: TimeInterval { 999 }
@@ -26,7 +26,7 @@ enum MeshDensityConfig {
     static var finalVertexSoftCap: Int { 2_500_000 }
     /// More triangles kept = denser coverage / fewer holes
     static var triangleBudget: Int { highDetail ? 750_000 : 450_000 }
-    static var bakeKeyframeLimit: Int { 52 }
+    static var bakeKeyframeLimit: Int { 64 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 
@@ -35,8 +35,8 @@ enum MeshDensityConfig {
     static var meshBankTilesPerTick: Int { 48 }
 
     /// Depth hole-fill sample density (lower step = denser)
-    static var depthSampleStep: Int { 5 }
-    static var depthIngestInterval: TimeInterval { 0.5 }
+    static var depthSampleStep: Int { 4 }
+    static var depthIngestInterval: TimeInterval { 0.35 }
 
     static func blueWireFaceStep(faceCount: Int) -> Int {
         faceCount > 4_000 ? 10 : 5
