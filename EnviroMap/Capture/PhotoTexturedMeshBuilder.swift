@@ -35,6 +35,8 @@ enum PhotoTexturedMeshBuilder {
 
     /// Hard ceiling so bake never hangs on phone
     private static let bakeDeadlineSeconds: CFTimeInterval = 48
+    /// Fallback color when paint times out — always visible on dark bg
+    private static let visibleGray: (UInt8, UInt8, UInt8) = (168, 172, 178)
     /// Depth colors for hole fill (set only during buildScene)
     private static var bakeDepthSamples: [(SIMD3<Float>, SIMD3<Float>)] = []
 
@@ -168,7 +170,12 @@ enum PhotoTexturedMeshBuilder {
             var colorCache = [Int: (UInt8, UInt8, UInt8)]()
             func colorAt(_ i: Int) -> (UInt8, UInt8, UInt8) {
                 if let c = colorCache[i] { return c }
-                let c = colorBudgetExhausted ? visibleGray : fastColor(world: worldP(i), normal: worldN(i), keyframes: kfs)
+                let c: (UInt8, UInt8, UInt8)
+                if colorBudgetExhausted {
+                    c = Self.visibleGray
+                } else {
+                    c = fastColor(world: worldP(i), normal: worldN(i), keyframes: kfs)
+                }
                 colorCache[i] = c
                 // Keep sparse fill samples
                 if fillSamples.count < 800, colorCache.count % 12 == 0 {
@@ -230,7 +237,12 @@ enum PhotoTexturedMeshBuilder {
                     let nm12 = simd_normalize(n1 + n2)
                     let nm20 = simd_normalize(n2 + n0)
                     func emitMid(_ w: SIMD3<Float>, _ n: SIMD3<Float>) -> UInt32 {
-                        let c = colorBudgetExhausted ? visibleGray : fastColor(world: w, normal: n, keyframes: kfs)
+                        let c: (UInt8, UInt8, UInt8)
+                        if colorBudgetExhausted {
+                            c = Self.visibleGray
+                        } else {
+                            c = fastColor(world: w, normal: n, keyframes: kfs)
+                        }
                         allPos.append(contentsOf: [w.x, w.y, w.z])
                         allNrm.append(contentsOf: [n.x, n.y, n.z])
                         allCol.append(contentsOf: [
@@ -326,7 +338,7 @@ enum PhotoTexturedMeshBuilder {
         normal: SIMD3<Float>,
         keyframes: [Keyframe]
     ) -> (UInt8, UInt8, UInt8) {
-        guard !keyframes.isEmpty else { return visibleGray }
+        guard !keyframes.isEmpty else { return Self.visibleGray }
 
         var bestW: Float = -1
         var bestC: (UInt8, UInt8, UInt8)?
@@ -348,10 +360,14 @@ enum PhotoTexturedMeshBuilder {
             let expQ = sampleExposureQuality(c)
             if expQ < 0.08 { continue } // skip pure black / blown white
 
-            let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
-            // Slight preference for mid-luma frames; still accept dark/bright if sample is good
-            let frameQ: Float = 0.75 + 0.25 * frameExposureQuality(kf.meanLuma)
-            let w = Float(facing) * (1 / max(dist, 0.2)) * (0.35 + 0.65 * center) * expQ * frameQ
+            let cx = 1 - abs(uv.x - 0.5)
+            let cy = 1 - abs(uv.y - 0.5)
+            let center = cx * cy
+            let frameQ = frameExposureQuality(kf.meanLuma)
+            let frameBoost: Float = 0.75 + 0.25 * frameQ
+            let distTerm: Float = 1.0 / max(dist, 0.2)
+            let centerTerm: Float = 0.35 + 0.65 * center
+            let w = Float(facing) * distTerm * centerTerm * expQ * frameBoost
             if w > bestW {
                 bestW = w
                 bestC = c
@@ -366,19 +382,22 @@ enum PhotoTexturedMeshBuilder {
         if let dc = nearestDepthColor(world) {
             return adaptiveEnhance(dc, sceneLuma: 0.45)
         }
-        return visibleGray
+        return Self.visibleGray
     }
 
     /// 0...1 — how usable is this pixel (reject crushed blacks / blown highlights)
     private static func sampleExposureQuality(_ c: (UInt8, UInt8, UInt8)) -> Float {
-        let y = (Float(c.0) + Float(c.1) + Float(c.2)) / (3 * 255)
-        let sat = Float(max(c.0, max(c.1, c.2)) - min(c.0, min(c.1, c.2)))
-        // Only reject pure blown white
-        if y > 0.985, sat < 8 { return 0.15 }
-        // Keep dark samples — coverage > perfect exposure
+        let r = Float(c.0)
+        let g = Float(c.1)
+        let b = Float(c.2)
+        let y = (r + g + b) / (3.0 * 255.0)
+        let mx = max(r, max(g, b))
+        let mn = min(r, min(g, b))
+        let sat = mx - mn
+        if y > 0.985 && sat < 8 { return 0.15 }
         if y < 0.03 { return 0.35 }
         if y < 0.12 { return 0.7 }
-        if y > 0.18, y < 0.88 { return 1.0 }
+        if y > 0.18 && y < 0.88 { return 1.0 }
         return 0.85
     }
 
@@ -598,41 +617,54 @@ enum PhotoTexturedMeshBuilder {
         _ c: (UInt8, UInt8, UInt8),
         sceneLuma: Float
     ) -> (UInt8, UInt8, UInt8) {
-        var r = Float(c.0) / 255
-        var g = Float(c.1) / 255
-        var b = Float(c.2) / 255
-        let y = (r + g + b) / 3
+        var r = Float(c.0) / 255.0
+        var g = Float(c.1) / 255.0
+        var bl = Float(c.2) / 255.0
+        let y = (r + g + bl) / 3.0
 
         if sceneLuma < 0.32 || y < 0.28 {
-            // Dark environment / dark surface — gentle shadow lift (not washed)
             let lift: Float = 0.12
-            r = min(1, r + lift * (1 - r))
-            g = min(1, g + lift * (1 - g))
-            b = min(1, b + lift * (1 - b))
+            r = min(1.0, r + lift * (1.0 - r))
+            g = min(1.0, g + lift * (1.0 - g))
+            bl = min(1.0, bl + lift * (1.0 - bl))
         } else if sceneLuma > 0.72 || y > 0.82 {
-            // Bright outdoor / sun — soft highlight compression
-            func soft(_ v: Float) -> Float {
-                if v < 0.7 { return v }
-                return 0.7 + (v - 0.7) * 0.55
-            }
-            r = soft(r); g = soft(g); b = soft(b)
+            r = softHighlight(r)
+            g = softHighlight(g)
+            bl = softHighlight(bl)
         }
 
-        // Clarity: mild contrast + saturation
-        let mid = (r + g + b) / 3
+        let mid = (r + g + bl) / 3.0
         let contrast: Float = 1.12
-        r = min(1, max(0, mid + (r - mid) * contrast))
-        g = min(1, max(0, mid + (g - mid) * contrast))
-        b = min(1, max(0, mid + (b - mid) * contrast))
-        let avg = (r + g + b) / 3
+        r = clamp01(mid + (r - mid) * contrast)
+        g = clamp01(mid + (g - mid) * contrast)
+        bl = clamp01(mid + (bl - mid) * contrast)
+
+        let avg = (r + g + bl) / 3.0
         let sat: Float = 1.12
-        r = min(1, max(0, avg + (r - avg) * sat))
-        g = min(1, max(0, avg + (g - avg) * sat))
-        b = min(1, max(0, avg + (b - avg) * sat))
-        // Floor — never pure black (vanishes on dark background)
+        r = clamp01(avg + (r - avg) * sat)
+        g = clamp01(avg + (g - avg) * sat)
+        bl = clamp01(avg + (bl - avg) * sat)
+
         let floor: Float = 0.12
-        r = max(r, floor); g = max(g, floor); b = max(b, floor)
-        return (UInt8(r * 255), UInt8(g * 255), UInt8(b * 255))
+        r = max(r, floor)
+        g = max(g, floor)
+        bl = max(bl, floor)
+
+        let ru = UInt8(r * 255.0)
+        let gu = UInt8(g * 255.0)
+        let bu = UInt8(bl * 255.0)
+        return (ru, gu, bu)
+    }
+
+    private static func softHighlight(_ v: Float) -> Float {
+        if v < 0.7 { return v }
+        return 0.7 + (v - 0.7) * 0.55
+    }
+
+    private static func clamp01(_ v: Float) -> Float {
+        if v < 0 { return 0 }
+        if v > 1 { return 1 }
+        return v
     }
 
     private static func imageFromRGB(_ rgb: [UInt8], width: Int, height: Int) -> UIImage? {
