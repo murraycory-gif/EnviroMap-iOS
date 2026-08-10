@@ -82,43 +82,51 @@ struct ToolsHomeView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 4)
 
                     ScrollView(showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Map your space")
-                                .font(.system(size: 24, weight: .bold, design: .rounded))
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text("Map Your Space")
+                                .font(.system(size: 26, weight: .bold, design: .rounded))
                                 .foregroundStyle(AppTheme.text)
+                                .padding(.top, 8)
 
-                            // Primary
+                            // Primary — big, thumb-friendly, sits lower
                             Button {
                                 showScanner = true
                             } label: {
-                                HStack(spacing: 14) {
-                                    ZStack {
-                                        Circle()
-                                            .fill(.white.opacity(0.22))
-                                            .frame(width: 56, height: 56)
-                                        Image(systemName: "camera.viewfinder")
-                                            .font(.title2.weight(.bold))
-                                            .foregroundStyle(.white)
+                                VStack(spacing: 14) {
+                                    HStack(spacing: 16) {
+                                        ZStack {
+                                            Circle()
+                                                .fill(.white.opacity(0.22))
+                                                .frame(width: 72, height: 72)
+                                            Image(systemName: "camera.viewfinder")
+                                                .font(.system(size: 32, weight: .bold))
+                                                .foregroundStyle(.white)
+                                        }
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text("Full 3D Scan")
+                                                .font(.system(size: 26, weight: .bold, design: .rounded))
+                                            Text("Capture Everything · Real Colors")
+                                                .font(.system(size: 15, weight: .semibold))
+                                                .opacity(0.95)
+                                        }
+                                        Spacer(minLength: 0)
+                                        Image(systemName: "arrow.right.circle.fill")
+                                            .font(.system(size: 36))
                                     }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Full 3D Scan")
-                                            .font(.title3.weight(.bold))
-                                        Text("Capture everything · real colors")
-                                            .font(.subheadline)
-                                            .opacity(0.92)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "arrow.right.circle.fill")
-                                            .font(.title)
+                                    Text("Tap To Start Mapping Your Space")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .opacity(0.88)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .foregroundStyle(.white)
-                                .padding(18)
-                                .frame(maxWidth: .infinity, minHeight: 88)
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 22)
+                                .frame(maxWidth: .infinity, minHeight: 130)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 24, style: .continuous)
                                         .fill(
                                             LinearGradient(
                                                 colors: [AppTheme.blue, AppTheme.blueDeep],
@@ -126,11 +134,12 @@ struct ToolsHomeView: View {
                                                 endPoint: .bottomTrailing
                                             )
                                         )
-                                        .shadow(color: AppTheme.blue.opacity(0.3), radius: 12, y: 5)
+                                        .shadow(color: AppTheme.blue.opacity(0.38), radius: 18, y: 8)
                                 )
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .padding(.top, 4)
 
                             // My rooms
                             Button {

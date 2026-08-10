@@ -106,8 +106,7 @@ enum PhotoTexturedMeshBuilder {
 
             // Adaptive step: keep denser mesh for smaller chunks (detail objects)
             let triStep: Int
-            if triCount > 80_000 { triStep = 3 }
-            else if triCount > 40_000 { triStep = 2 }
+            if triCount > 100_000 { triStep = 2 }
             else { triStep = 1 }
 
             var localMap: [Int: UInt32] = [:]
@@ -200,8 +199,11 @@ enum PhotoTexturedMeshBuilder {
         mat.isDoubleSided = true
         mat.fillMode = .fill
         mat.writesToDepthBuffer = true
-        // Vertex colors drive appearance
+        mat.readsFromDepthBuffer = true
+        // White diffuse so vertex colors show at full strength
         mat.diffuse.contents = UIColor.white
+        mat.ambient.contents = UIColor.white
+        mat.locksAmbientWithDiffuse = true
         geom.materials = [mat]
 
         let node = SCNNode(geometry: geom)
@@ -221,66 +223,106 @@ enum PhotoTexturedMeshBuilder {
         return scene
     }
 
-    /// Multi-view weighted average of camera colors (sharper than single sample).
+    /// Real camera colors via viewport → image displayTransform (correct orientation).
     private static func colorFor(
         world: SIMD3<Float>,
         normal: SIMD3<Float>,
         keyframes: [Keyframe]
     ) -> (UInt8, UInt8, UInt8) {
-        guard !keyframes.isEmpty else { return (170, 175, 180) }
+        guard !keyframes.isEmpty else { return (190, 190, 195) }
 
         var rSum: Float = 0, gSum: Float = 0, bSum: Float = 0, wSum: Float = 0
-        // Prefer recent keyframes (often better aimed)
-        let list = keyframes.reversed()
         var hits = 0
 
-        for kf in list {
+        // Prefer newer frames (usually better aimed at current surfaces)
+        for kf in keyframes.reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.05 || dist > 10 { continue }
+            if dist < 0.08 || dist > 8 { continue }
 
-            // Facing camera?
             let viewDir = toCam / max(dist, 1e-4)
-            let facing = simd_dot(normal, viewDir)
-            if facing < 0.05 { continue }
+            // abs — AR mesh normals can flip
+            let facing = abs(simd_dot(normal, viewDir))
+            if facing < 0.02 { continue }
 
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-            if view.z > -0.02 { continue }
+            if view.z > -0.05 { continue } // behind near plane
 
             let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
             guard projected.x.isFinite, projected.y.isFinite else { continue }
-            let vpW = max(Float(kf.viewport.width), 1)
-            let vpH = max(Float(kf.viewport.height), 1)
-            let nx = Float(projected.x) / vpW
-            let ny = Float(projected.y) / vpH
-            guard nx >= 0, nx <= 1, ny >= 0, ny <= 1 else { continue }
 
-            let x0 = Int(nx * Float(kf.rgbWidth - 1))
-            let y0 = Int(ny * Float(kf.rgbHeight - 1))
-            guard let c = sample(kf, x0, y0) else { continue }
+            let vpW = max(kf.viewport.width, 1)
+            let vpH = max(kf.viewport.height, 1)
+            // Normalized viewport → normalized camera image (handles portrait/landscape)
+            let vpNorm = CGPoint(x: projected.x / vpW, y: projected.y / vpH)
+            let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
+            guard imgNorm.x.isFinite, imgNorm.y.isFinite else { continue }
+            // Small margin so we still color edges of objects
+            guard imgNorm.x >= -0.02, imgNorm.x <= 1.02, imgNorm.y >= -0.02, imgNorm.y <= 1.02 else { continue }
 
-            // Weight: closer + more face-on + more centered
-            let center = (1 - abs(nx - 0.5)) * (1 - abs(ny - 0.5))
-            let w = (facing * facing) * (1.0 / max(dist, 0.2)) * (0.4 + 0.6 * center)
+            let u = min(1, max(0, imgNorm.x))
+            let v = min(1, max(0, imgNorm.y))
+            guard let c = sampleBilinear(kf, u: Float(u), v: Float(v)) else { continue }
+
+            // Skip pure black (shadow holes) and pure white blown highlights if we have alternatives
+            let lum = (Float(c.0) + Float(c.1) + Float(c.2)) / 3
+            if lum < 8 || lum > 250 { continue }
+
+            let center = Float((1 - abs(u - 0.5)) * (1 - abs(v - 0.5)))
+            let w = Float(facing) * (1.0 / max(dist, 0.25)) * (0.35 + 0.65 * center)
             rSum += Float(c.0) * w
             gSum += Float(c.1) * w
             bSum += Float(c.2) * w
             wSum += w
             hits += 1
-            if hits >= 6 { break } // enough blend
+            if hits >= 8 { break }
         }
 
         if wSum < 1e-5 {
-            // Fallback: nearest keyframe color at center sample
-            if let kf = keyframes.last, let c = sample(kf, kf.rgbWidth / 2, kf.rgbHeight / 2) {
-                return c
+            // Last resort: nearest camera sample without facing filter
+            for kf in keyframes.reversed() {
+                let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
+                let vpW = max(kf.viewport.width, 1)
+                let vpH = max(kf.viewport.height, 1)
+                let vpNorm = CGPoint(x: projected.x / vpW, y: projected.y / vpH)
+                let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
+                if imgNorm.x >= 0, imgNorm.x <= 1, imgNorm.y >= 0, imgNorm.y <= 1,
+                   let c = sampleBilinear(kf, u: Float(imgNorm.x), v: Float(imgNorm.y)) {
+                    return boostSaturation(c)
+                }
             }
-            return (150, 155, 160)
+            return (175, 178, 182)
         }
+
+        let r = UInt8(min(255, max(0, rSum / wSum)))
+        let g = UInt8(min(255, max(0, gSum / wSum)))
+        let b = UInt8(min(255, max(0, bSum / wSum)))
+        return boostSaturation((r, g, b))
+    }
+
+    /// Bilinear sample in normalized image coords (0…1).
+    private static func sampleBilinear(_ kf: Keyframe, u: Float, v: Float) -> (UInt8, UInt8, UInt8)? {
+        let fx = u * Float(max(kf.rgbWidth - 1, 1))
+        let fy = v * Float(max(kf.rgbHeight - 1, 1))
+        let x0 = Int(floor(fx))
+        let y0 = Int(floor(fy))
+        let x1 = min(x0 + 1, kf.rgbWidth - 1)
+        let y1 = min(y0 + 1, kf.rgbHeight - 1)
+        let tx = fx - Float(x0)
+        let ty = fy - Float(y0)
+        guard let c00 = sample(kf, x0, y0),
+              let c10 = sample(kf, x1, y0),
+              let c01 = sample(kf, x0, y1),
+              let c11 = sample(kf, x1, y1) else { return nil }
+        func mix(_ a: UInt8, _ b: UInt8, _ t: Float) -> Float {
+            Float(a) * (1 - t) + Float(b) * t
+        }
+        let r0 = mix(c00.0, c10.0, tx), g0 = mix(c00.1, c10.1, tx), b0 = mix(c00.2, c10.2, tx)
+        let r1 = mix(c01.0, c11.0, tx), g1 = mix(c01.1, c11.1, tx), b1 = mix(c01.2, c11.2, tx)
         return (
-            UInt8(min(255, max(0, rSum / wSum))),
-            UInt8(min(255, max(0, gSum / wSum))),
-            UInt8(min(255, max(0, bSum / wSum)))
+            UInt8(min(255, max(0, r0 * (1 - ty) + r1 * ty))),
+            UInt8(min(255, max(0, g0 * (1 - ty) + g1 * ty))),
+            UInt8(min(255, max(0, b0 * (1 - ty) + b1 * ty)))
         )
     }
 
@@ -290,6 +332,37 @@ enum PhotoTexturedMeshBuilder {
         let o = (yy * kf.rgbWidth + xx) * 3
         guard o + 2 < kf.rgb.count else { return nil }
         return (kf.rgb[o], kf.rgb[o + 1], kf.rgb[o + 2])
+    }
+
+    /// Punch real colors so objects are recognizable (was looking washed gray).
+    private static func boostSaturation(_ c: (UInt8, UInt8, UInt8)) -> (UInt8, UInt8, UInt8) {
+        var r = Float(c.0) / 255
+        var g = Float(c.1) / 255
+        var b = Float(c.2) / 255
+        let maxC = max(r, max(g, b))
+        let minC = min(r, min(g, b))
+        let l = (maxC + minC) * 0.5
+        let d = maxC - minC
+        if d > 0.02 {
+            let s = d / max(1 - abs(2 * l - 1), 0.001)
+            let s2 = min(1, s * 1.35) // +35% sat
+            // Convert back roughly via lerp toward gray
+            let gray = l
+            let t = s2 / max(s, 0.001)
+            r = gray + (r - gray) * t
+            g = gray + (g - gray) * t
+            b = gray + (b - gray) * t
+        }
+        // Slight contrast
+        func contrast(_ x: Float) -> Float {
+            let y = (x - 0.5) * 1.12 + 0.5
+            return min(1, max(0, y))
+        }
+        return (
+            UInt8(contrast(r) * 255),
+            UInt8(contrast(g) * 255),
+            UInt8(contrast(b) * 255)
+        )
     }
 
     // MARK: - Normalize / camera
