@@ -1,45 +1,37 @@
 import Foundation
 
-/// Faster fuller capture; Finish does one dense harvest. Higher-res frames = clearer color.
+/// First principles: during the walk, give CPU to ARKit (no live mesh copies).
+/// We only harvest full mesh on Finish — denser scan, walk at normal speed.
 enum MeshDensityConfig {
     static var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
     }
 
-    /// Live mesh copies until this many stored tiles (higher = more coverage, watch lag)
-    static var liveMeshCopyUntilChunks: Int { 90 }
-    static var meshCopyInterval: TimeInterval { 0.18 }
-
-    /// After warm-up, still sample mesh slowly so we don't miss surfaces
-    static var postWarmupMeshInterval: TimeInterval { 0.55 }
-
+    /// Color frames while walking (cheap). Faster when moving.
     static func keyframeInterval(movingFast: Bool) -> TimeInterval {
-        movingFast ? 0.14 : 0.22
+        movingFast ? 0.10 : 0.18
     }
 
-    static var maxKeyframes: Int { 64 }
-    static var maxChunks: Int { 2800 }
-    /// Higher = sharper color (more RAM — capped safely)
-    static var keyframeMaxWidth: Int { 720 }
+    static var maxKeyframes: Int { 72 }
+    static var maxChunks: Int { 4000 }
+    /// Higher = sharper color
+    static var keyframeMaxWidth: Int { 768 }
 
-    static func liveVertexStep(vCount: Int) -> Int {
-        if vCount > 100_000 { return 2 }
-        return 1
-    }
+    // Live mesh copies DISABLED (0) — ARKit builds denser mesh when we stop fighting it
+    static var liveMeshCopyUntilChunks: Int { 0 }
+    static var meshCopyInterval: TimeInterval { 999 }
+    static var postWarmupMeshInterval: TimeInterval { 999 }
 
-    static func liveFaceStep(faceCount: Int) -> Int {
-        if faceCount > 90_000 { return 2 }
-        return 1
-    }
+    static func liveVertexStep(vCount: Int) -> Int { 1 }
+    static func liveFaceStep(faceCount: Int) -> Int { 1 }
 
-    static var finalVertexSoftCap: Int { 900_000 }
-    static var triangleBudget: Int { highDetail ? 550_000 : 320_000 }
-    static var bakeKeyframeLimit: Int { 64 }
-    static var samplesPerTriangle: Int { 4 }
+    static var finalVertexSoftCap: Int { 1_200_000 }
+    static var triangleBudget: Int { highDetail ? 700_000 : 400_000 }
+    static var bakeKeyframeLimit: Int { 72 }
+    static var samplesPerTriangle: Int { 3 }
     static var quantizeShift: Int { 2 }
 
     static func blueWireFaceStep(faceCount: Int) -> Int {
-        if faceCount > 5_000 { return 12 }
-        return 6
+        faceCount > 4_000 ? 10 : 5
     }
 }

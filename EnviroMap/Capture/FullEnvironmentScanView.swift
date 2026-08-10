@@ -232,7 +232,7 @@ struct FullEnvironmentScanView: View {
                 }
 
                 VStack(spacing: 10) {
-                    Text("Creating Your 3D View")
+                    Text("Building Your 3D Space")
                     Text(BuildStamp.label)
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
@@ -590,25 +590,26 @@ final class FullEnvironmentScanModel: ObservableObject {
     /// Everyday language only — no mesh counts for the user.
     @MainActor
     private func applySimpleGuidance(meshCount: Int) {
-        if meshCount < 5 {
-            simpleGuide = "Point At Your Space And Walk Slowly"
+        // meshCount = live ARKit surfaces (normal walking is fine)
+        if meshCount < 4 {
+            simpleGuide = "Point At Your Space And Walk Around"
             simpleStatusTitle = "Starting…"
-            simpleProgress = 0.1
+            simpleProgress = 0.12
             simpleProgressLabel = "Getting Started"
-        } else if meshCount < 20 {
-            simpleGuide = "Keep Walking Around What You See"
+        } else if meshCount < 12 {
+            simpleGuide = "Keep Walking · Cover Everything You See"
             simpleStatusTitle = "Scanning…"
-            simpleProgress = 0.3
+            simpleProgress = 0.35
             simpleProgressLabel = "Keep Going"
-        } else if meshCount < 45 {
-            simpleGuide = "Walk Around Every Side · Slow And Steady"
+        } else if meshCount < 22 {
+            simpleGuide = "Walk Every Side · Normal Pace Is Fine"
             simpleStatusTitle = "Scanning…"
-            simpleProgress = 0.55
+            simpleProgress = 0.6
             simpleProgressLabel = "Halfway There"
-        } else if meshCount < 70 {
-            simpleGuide = "Almost Done · Check For Empty Spots"
+        } else if meshCount < 35 {
+            simpleGuide = "Almost Done · Fill Any Empty Spots"
             simpleStatusTitle = "Looking Good"
-            simpleProgress = 0.8
+            simpleProgress = 0.85
             simpleProgressLabel = "Almost Ready"
         } else {
             simpleGuide = "Looking Great · Tap Finish"
@@ -625,22 +626,32 @@ final class FullEnvironmentScanModel: ObservableObject {
         guard phase == .scanning else { return }
         phase = .processing
         statusTitle = "Processing"
-        instruction = "Building your 3D view…"
+        instruction = "Building Your 3D View…"
         bakeProgress = 0.02
-        bakeStatus = "Locking scan data…"
+        bakeStatus = "Locking Scan…"
         controller.stopCapturing()
         previewImage = controller.snapshot()
-        controller.forceFinalHarvest()
-        bakeProgress = 0.08
-        bakeStatus = "Preparing color bake…"
 
         let ctrl = controller
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
 
+            DispatchQueue.main.async {
+                self.bakeProgress = 0.1
+                self.bakeStatus = "Pulling Full Space Mesh…"
+            }
+
+            // Harvest on background — never sleep on UI thread
+            ctrl.forceFinalHarvest()
+
+            DispatchQueue.main.async {
+                self.bakeProgress = 0.2
+                self.bakeStatus = "Painting Real Colors…"
+            }
+
             PhotoTexturedMeshBuilder.progressHandler = { [weak self] p, msg in
                 DispatchQueue.main.async {
-                    self?.bakeProgress = min(max(p, 0.08), 0.99)
+                    self?.bakeProgress = min(max(0.2 + p * 0.75, 0.2), 0.99)
                     self?.bakeStatus = msg
                 }
             }
@@ -656,21 +667,18 @@ final class FullEnvironmentScanModel: ObservableObject {
                     self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
                     self.previewScene = scene
                     self.bakeProgress = 0.97
-                    self.bakeStatus = "Opening your scan…"
+                    self.bakeStatus = "Opening Your Scan…"
                     self.phase = .saving
                     self.controller.stop()
                     self.exportReadyToken += 1
                     self.onExportReady?()
                 } else {
-                    // Never silent-fail: show actionable error
                     let mc = self.meshChunks
-                    let fc = self.hasColorFrames
                     self.phase = .failed(
                         mc == 0
-                        ? "No mesh captured. Move closer and scan until blue lines cover objects."
-                        : "Could not build the 3D view (\(mc) mesh pieces). Try a slower circle around the object."
+                        ? "No Mesh Captured. Walk Around Your Space Until Coverage Looks Full, Then Tap Finish."
+                        : "Could Not Build The 3D View. Try Walking All Sides Once More."
                     )
-                    _ = fc
                 }
             }
         }
@@ -731,9 +739,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         scn.rendersCameraGrain = false
         scn.delegate = self
         // Yellow feature points + we'll add blue mesh lines for coverage
-        let blueOn = UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? false
-        // Feature points only — light feedback without mesh rebuilds
-        scn.debugOptions = blueOn ? [] : [.showFeaturePoints]
+        // Live ARKit mesh shows as blue coverage (styled in renderer)
+        scn.debugOptions = []
+        scn.rendersContinuously = true
         view.addSubview(scn)
         arView = scn
         let root = SCNNode()
@@ -792,17 +800,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             config.frameSemantics.insert(.sceneDepth)
         }
         // Smoother tracking → better mesh continuity
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-            config.frameSemantics.insert(.smoothedSceneDepth)
-        }
 
         isRunning = true
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
     }
 
     func stopCapturing() {
+        // Stop live keyframes only — harvest runs once on background queue
         isRunning = false
-        forceFinalHarvest()
     }
 
     func stop() {
@@ -813,19 +818,20 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // ONE full pull from ARKit — ignore thin live copies (source of holes + lag)
-        guard let frame = arView?.session.currentFrame else { return }
-        autoreleasepool {
-            ingestKeyframe(from: frame)
-            let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+        // THE only geometry pull — full quality from ARKit after the walk
+        guard let session = arView?.session else { return }
 
+        // Brief settle so ARKit can densify last surfaces
+        Thread.sleep(forTimeInterval: 0.15)
+
+        func pull(from frame: ARFrame) -> [UUID: CapturedMeshChunk] {
             var fresh: [UUID: CapturedMeshChunk] = [:]
+            let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
             for mesh in meshes {
                 if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
                     fresh[chunk.id] = chunk
                 }
             }
-            // Fallback light if full failed for some
             if fresh.isEmpty {
                 for mesh in meshes {
                     if let chunk = Self.copyChunk(from: mesh, fullQuality: false) {
@@ -833,27 +839,34 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                     }
                 }
             }
-            // Prefer full harvest; merge any live-only ids that disappeared from frame
-            stateLock.lock()
-            if !fresh.isEmpty {
-                // Keep denser of fresh vs existing per id
-                for (id, chunk) in fresh {
-                    if let old = chunks[id], old.positions.count > chunk.positions.count {
-                        // keep denser
-                    } else {
-                        chunks[id] = chunk
+            return fresh
+        }
+
+        autoreleasepool {
+            if let frame = session.currentFrame {
+                ingestKeyframe(from: frame)
+                var all = pull(from: frame)
+
+                // Second pass — ARKit often densifies mid-harvest
+                Thread.sleep(forTimeInterval: 0.12)
+                if let frame2 = session.currentFrame {
+                    ingestKeyframe(from: frame2)
+                    let second = pull(from: frame2)
+                    for (id, chunk) in second {
+                        if let old = all[id], old.positions.count >= chunk.positions.count {
+                            continue
+                        }
+                        all[id] = chunk
                     }
                 }
-                // If fresh has many more anchors, replace entirely with fresh (ARKit truth)
-                if fresh.count >= chunks.count {
-                    chunks = fresh
-                } else {
-                    for (id, chunk) in fresh { chunks[id] = chunk }
-                }
+
+                stateLock.lock()
+                chunks = all
+                let total = chunks.count
+                let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
+                stateLock.unlock()
+                print("[EnviroMap] HARVEST chunks=\(total) verts=\(verts)")
             }
-            let total = chunks.count
-            stateLock.unlock()
-            print("[EnviroMap] final harvest anchors=\(meshes.count) chunks=\(total)")
         }
     }
 
@@ -1010,26 +1023,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         guard isRunning else { return }
         let ts = frame.timestamp
 
-        stateLock.lock()
-        let stored = chunks.count
-        let framesN = keyframes.count
-        stateLock.unlock()
+        // FIRST PRINCIPLES: do NOT copy mesh geometry while walking.
+        // Live mesh copies steal CPU from ARKit → sparse holes when you walk normal speed.
+        // ARKit builds the dense mesh; we harvest everything once on Finish.
 
         let liveMeshCount = frame.anchors.compactMap { $0 as? ARMeshAnchor }.count
 
-        // Mesh copy: fast while warming up, then rare updates (more coverage, less freeze)
-        let warmUp = stored < MeshDensityConfig.liveMeshCopyUntilChunks
-        let meshInterval = warmUp
-            ? MeshDensityConfig.meshCopyInterval
-            : MeshDensityConfig.postWarmupMeshInterval
-        if ts - lastMeshCopyTime >= meshInterval {
-            lastMeshCopyTime = ts
-            autoreleasepool { ingestMeshes(from: frame) }
-            emitStats(meshCount: max(stored, liveMeshCount), frameCount: framesN)
-            return
-        }
-
-        // Color keyframes while walking
         let pos = SIMD3<Float>(
             frame.camera.transform.columns.3.x,
             frame.camera.transform.columns.3.y,
@@ -1037,22 +1036,23 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         )
         var moving = false
         if let prev = lastCamPos {
-            moving = simd_length(pos - prev) > 0.012
+            moving = simd_length(pos - prev) > 0.01
         }
         lastCamPos = pos
 
+        // Color frames only — cheap, lets you walk at normal pace
         let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
         if ts - lastKeyframeTime >= kfI {
             lastKeyframeTime = ts
             autoreleasepool { ingestKeyframe(from: frame) }
         }
 
-        if ts - lastStatsEmit >= 0.4 {
+        // Progress from ARKit's live mesh count (not our stored copies)
+        if ts - lastStatsEmit >= 0.35 {
             stateLock.lock()
             let fn = keyframes.count
-            let sn = chunks.count
             stateLock.unlock()
-            emitStats(meshCount: max(sn, liveMeshCount), frameCount: fn)
+            emitStats(meshCount: max(liveMeshCount, 1), frameCount: fn)
         }
     }
 
@@ -1060,6 +1060,32 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         DispatchQueue.main.async { [weak self] in
             self?.onError?(error.localizedDescription)
         }
+    }
+
+    // Live blue mesh = free ARKit coverage view (no geometry copy cost)
+    func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+        guard anchor is ARMeshAnchor else { return }
+        styleCoverageNode(node)
+    }
+
+    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
+        guard anchor is ARMeshAnchor else { return }
+        styleCoverageNode(node)
+    }
+
+    private func styleCoverageNode(_ node: SCNNode) {
+        let paint: (SCNNode) -> Void = { n in
+            guard let g = n.geometry else { return }
+            for m in g.materials {
+                m.diffuse.contents = UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 0.4)
+                m.transparency = 0.4
+                m.isDoubleSided = true
+                m.lightingModel = .constant
+                m.writesToDepthBuffer = true
+            }
+        }
+        paint(node)
+        node.enumerateChildNodes { child, _ in paint(child) }
     }
 
     private func ingestMeshes(from frame: ARFrame) {
@@ -1172,11 +1198,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         if keyframes.count > maxKeyframes {
             keyframes.removeFirst(keyframes.count - maxKeyframes)
         }
-        let meshCount = chunks.count
-        let frameCount = keyframes.count
         stateLock.unlock()
-
-        emitStats(meshCount: meshCount, frameCount: frameCount)
+        // Progress comes from session(didUpdate) live ARKit mesh count — not empty chunks
     }
 
     private func emitStats(meshCount: Int, frameCount: Int) {
@@ -1211,7 +1234,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         _ = g
     }
 
-        private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false) -> CapturedMeshChunk? {
+    private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false) -> CapturedMeshChunk? {
         let geom = anchor.geometry
         let vSource = geom.vertices
         let nSource = geom.normals
@@ -1223,8 +1246,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // Only subsample when huge. Done harvest uses step 1 unless insane.
         let step: Int
         if fullQuality {
-            // Keep full mesh unless ARKit hands an extreme tile
-            step = vCount > MeshDensityConfig.finalVertexSoftCap ? 2 : 1
+            step = 1  // never thin on Finish — holes are worse than big files
         } else {
             step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }
