@@ -203,35 +203,7 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Photo texture OFF for clean solid look (was causing patchy warp)
-                // Vertex colors + depth color fill only
-                if false, texTris < 40_000,
-                   let pick = bestProjection(world: mid, normal: nMid, keyframes: kfs),
-                   pick.score > 0.85,
-                   photos[pick.index] != nil,
-                   let uv0 = projectUV(world: w0, kf: kfs[pick.index]),
-                   let uv1 = projectUV(world: w1, kf: kfs[pick.index]),
-                   let uv2 = projectUV(world: w2, kf: kfs[pick.index]) {
-                    let uvArea = abs((uv1.x - uv0.x) * (uv2.y - uv0.y) - (uv2.x - uv0.x) * (uv1.y - uv0.y))
-                    let maxEdge = max(simd_length(uv1 - uv0), max(simd_length(uv2 - uv1), simd_length(uv0 - uv2)))
-                    if uvArea > 1e-5, maxEdge < 0.4, maxEdge > 0.003 {
-                        let ki = pick.index
-                        func pushT(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
-                            texPos[ki].append(contentsOf: [w.x, w.y, w.z])
-                            texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
-                            texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
-                            let id = texBase[ki]
-                            texBase[ki] += 1
-                            return id
-                        }
-                        texIdx[ki].append(contentsOf: [
-                            pushT(w0, n0, uv0), pushT(w1, n1, uv1), pushT(w2, n2, uv2)
-                        ])
-                        texTris += 1
-                        triUsed += 1
-                        continue
-                    }
-                }
+                // Photo texture disabled — solid vertex colors only
 
                 // Vertex color (main path)
                 func emit(_ i: Int) -> UInt32 {
