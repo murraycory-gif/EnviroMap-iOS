@@ -249,14 +249,14 @@ enum PhotoTexturedMeshBuilder {
 
             let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
             guard projected.x.isFinite, projected.y.isFinite else { continue }
-            let nx = projected.x / max(kf.viewport.width, 1)
-            let ny = projected.y / max(kf.viewport.height, 1)
+            let vpW = max(Float(kf.viewport.width), 1)
+            let vpH = max(Float(kf.viewport.height), 1)
+            let nx = Float(projected.x) / vpW
+            let ny = Float(projected.y) / vpH
             guard nx >= 0, nx <= 1, ny >= 0, ny <= 1 else { continue }
 
-            // Sample with light bilinear feel (4 neighbors avg)
-            let fx = nx * Float(kf.rgbWidth - 1)
-            let fy = ny * Float(kf.rgbHeight - 1)
-            let x0 = Int(fx), y0 = Int(fy)
+            let x0 = Int(nx * Float(kf.rgbWidth - 1))
+            let y0 = Int(ny * Float(kf.rgbHeight - 1))
             guard let c = sample(kf, x0, y0) else { continue }
 
             // Weight: closer + more face-on + more centered
@@ -295,7 +295,7 @@ enum PhotoTexturedMeshBuilder {
     // MARK: - Normalize / camera
 
     static func normalizeForPreview(_ scene: SCNScene) {
-        if scene.rootNode.userData?["enviromap.normalized"] as? Bool == true,
+        if scene.rootNode.childNode(withName: "enviromap.normalized.flag", recursively: false) != nil,
            scene.rootNode.childNode(withName: "previewCam", recursively: true) != nil {
             return
         }
@@ -361,8 +361,12 @@ enum PhotoTexturedMeshBuilder {
         }
 
         scene.background.contents = UIColor.black
-        if scene.rootNode.userData == nil { scene.rootNode.userData = NSMutableDictionary() }
-        scene.rootNode.userData?["enviromap.normalized"] = true
+        if scene.rootNode.childNode(withName: "enviromap.normalized.flag", recursively: false) == nil {
+            let flag = SCNNode()
+            flag.name = "enviromap.normalized.flag"
+            flag.isHidden = true
+            scene.rootNode.addChildNode(flag)
+        }
     }
 
     // MARK: - Keyframes
@@ -416,9 +420,9 @@ enum PhotoTexturedMeshBuilder {
         let fullH = CVPixelBufferGetHeight(buffer)
         guard fullW > 1, fullH > 1 else { return nil }
 
-        let scale = min(1.0, CGFloat(maxWidth) / CGFloat(fullW))
-        let w = max(2, Int(CGFloat(fullW) * scale))
-        let h = max(2, Int(CGFloat(fullH) * scale))
+        let scale = min(1.0 as CGFloat, CGFloat(maxWidth) / CGFloat(max(fullW, 1)))
+        let w = max(2, Int((CGFloat(fullW) * scale).rounded(.down)))
+        let h = max(2, Int((CGFloat(fullH) * scale).rounded(.down)))
 
         CVPixelBufferLockBaseAddress(buffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
@@ -435,9 +439,9 @@ enum PhotoTexturedMeshBuilder {
             let videoRange = format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
 
             for j in 0..<h {
-                let sy = min(Int(CGFloat(j) / scale), fullH - 1)
+                let sy = min(Int((CGFloat(j) / max(scale, 0.0001)).rounded(.down)), fullH - 1)
                 for i in 0..<w {
-                    let sx = min(Int(CGFloat(i) / scale), fullW - 1)
+                    let sx = min(Int((CGFloat(i) / max(scale, 0.0001)).rounded(.down)), fullW - 1)
                     let Y = Float(yBase.advanced(by: sy * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
                     let cPtr = cBase.advanced(by: (sy / 2) * cStride + (sx / 2) * 2).assumingMemoryBound(to: UInt8.self)
                     let Cb = Float(cPtr[0]) - 128
@@ -458,9 +462,9 @@ enum PhotoTexturedMeshBuilder {
             guard let base = CVPixelBufferGetBaseAddress(buffer) else { return nil }
             let stride = CVPixelBufferGetBytesPerRow(buffer)
             for j in 0..<h {
-                let sy = min(Int(CGFloat(j) / scale), fullH - 1)
+                let sy = min(Int((CGFloat(j) / max(scale, 0.0001)).rounded(.down)), fullH - 1)
                 for i in 0..<w {
-                    let sx = min(Int(CGFloat(i) / scale), fullW - 1)
+                    let sx = min(Int((CGFloat(i) / max(scale, 0.0001)).rounded(.down)), fullW - 1)
                     let p = base.advanced(by: sy * stride + sx * 4).assumingMemoryBound(to: UInt8.self)
                     let o = (j * w + i) * 3
                     rgb[o] = p[2]; rgb[o + 1] = p[1]; rgb[o + 2] = p[0]
