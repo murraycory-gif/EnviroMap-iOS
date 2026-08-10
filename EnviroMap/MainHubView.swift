@@ -240,7 +240,7 @@ struct ToolsHomeView: View {
         openLatestMesh()
     }
 
-        private func gridButton(_ item: HomeGridItem) -> some View {
+    private func gridButton(_ item: HomeGridItem) -> some View {
         let enabled = !item.needsScan || roomCount > 0
         return Button {
             switch item.action {

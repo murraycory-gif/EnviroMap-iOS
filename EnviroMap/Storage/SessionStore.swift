@@ -12,7 +12,8 @@ final class SessionStore: ObservableObject {
     private let fileManager = FileManager.default
 
     private var rootURL: URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
         let dir = base.appendingPathComponent("EnviroMapScans", isDirectory: true)
         if !fileManager.fileExists(atPath: dir.path) {
             try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
