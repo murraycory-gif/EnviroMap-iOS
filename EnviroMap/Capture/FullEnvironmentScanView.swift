@@ -888,20 +888,23 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             var all = chunks
             stateLock.unlock()
 
-            // Finish HEAVY: many full pulls — this is where coverage is won
-            // Phone should be mostly still; ARKit densifies between pulls
-            for pass in 0..<8 {
+            // Finish HEAVY: max coverage — many full pulls while ARKit densifies
+            for pass in 0..<10 {
                 if let frame = session.currentFrame {
-                    // High-res color only on Finish (clear paint)
                     ingestKeyframe(from: frame, highRes: true)
                     merge(&all, pull(from: frame))
-                    if pass == 0 || pass == 3 || pass == 7 {
+                    if pass == 0 || pass == 4 || pass == 9 {
                         ingestDepthPoints(from: frame)
                     }
                 }
-                if pass < 7 {
-                    Thread.sleep(forTimeInterval: 0.22)
+                if pass < 9 {
+                    Thread.sleep(forTimeInterval: 0.20)
                 }
+            }
+            // Final all-tile pull (full quality, no live thin)
+            if let frame = session.currentFrame {
+                merge(&all, pull(from: frame))
+                ingestKeyframe(from: frame, highRes: true)
             }
 
             stateLock.lock()
@@ -973,9 +976,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        // NO mesh bank on every update (that caused lag + starved ARKit).
-        // Finish harvest pulls the full densest mesh.
-        guard showBlueMesh, let mesh = anchor as? ARMeshAnchor else { return }
+        guard let mesh = anchor as? ARMeshAnchor else { return }
+        // Rare densest upgrade (~1.2s/tile) — more coverage, still smooth
+        bankMeshNow(mesh, minInterval: 1.2)
+        guard showBlueMesh else { return }
         let id = mesh.identifier
         let now = CACurrentMediaTime()
         if let last = lastVizTime[id], now - last < 1.2 { return }
@@ -1341,12 +1345,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         // Memory guard during long scans
         let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
-        if verts > 1_200_000 {
+        if verts > 1_800_000 {
             let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
             var keep: [UUID: CapturedMeshChunk] = [:]
             var v = 0
             for c in ranked {
-                if v > 950_000 { break }
+                if v > 1_400_000 { break }
                 keep[c.id] = c
                 v += c.positions.count
             }
@@ -1477,8 +1481,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // liveBank: keep most detail but soft-cap huge tiles so mid-scan never freezes
         let step: Int
         if liveBank {
-            // Thin only huge tiles during walk so ARKit stays smooth
-            step = vCount > 25_000 ? 2 : 1
+            // Keep denser bank — only thin extreme tiles
+            step = vCount > 45_000 ? 2 : 1
         } else if fullQuality {
             step = 1  // Finish = every vertex
         } else {

@@ -140,7 +140,7 @@ enum PhotoTexturedMeshBuilder {
         var vcTris = 0
 
         // Prefer smaller detail chunks first
-        let ordered = chunks.sorted { $0.positions.count < $1.positions.count }
+        let ordered = chunks.sorted { $0.positions.count > $1.positions.count }  // big surfaces first
 
         for (ci, chunk) in ordered.enumerated() {
             // NEVER skip chunks — timeout only skips expensive coloring
@@ -192,9 +192,9 @@ enum PhotoTexturedMeshBuilder {
 
             // Prefer every triangle — only thin extreme tiles (holes > speed)
             var triStep = 1
-            // Prefer density — only thin absurd tiles
-            if triCount > 250_000 { triStep = 2 }
-            if triUsed > triBudget * 2 { triStep = 2 }
+            // Coverage first — only thin absurd tiles
+            if triCount > 400_000 { triStep = 2 }
+            if triUsed > triBudget * 3 { triStep = 2 }
 
             var remap = [Int: UInt32]()
 

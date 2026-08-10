@@ -12,7 +12,7 @@ enum MeshDensityConfig {
     }
 
     static var maxKeyframes: Int { 100 }
-    static var maxChunks: Int { 10_000 }
+    static var maxChunks: Int { 12_000 }
 
     /// Live scan uses this (smaller = smoother)
     static var liveKeyframeMaxWidth: Int { 720 }
@@ -26,15 +26,15 @@ enum MeshDensityConfig {
     static func liveVertexStep(vCount: Int) -> Int { 1 }
     static func liveFaceStep(faceCount: Int) -> Int { 1 }
 
-    static var finalVertexSoftCap: Int { 3_000_000 }
-    static var triangleBudget: Int { highDetail ? 1_000_000 : 600_000 }
+    static var finalVertexSoftCap: Int { 3_500_000 }
+    static var triangleBudget: Int { highDetail ? 1_200_000 : 700_000 }
     static var bakeKeyframeLimit: Int { 96 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 
     /// Rare full bank sweep during walk (smooth)
-    static var meshBankInterval: TimeInterval { 1.4 }
-    static var meshBankTilesPerTick: Int { 20 }
+    static var meshBankInterval: TimeInterval { 1.0 }
+    static var meshBankTilesPerTick: Int { 32 }
 
     static var depthSampleStep: Int { 5 }
     static var depthIngestInterval: TimeInterval { 0.55 }
