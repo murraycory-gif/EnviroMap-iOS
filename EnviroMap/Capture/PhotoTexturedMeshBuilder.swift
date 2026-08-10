@@ -22,6 +22,8 @@ enum PhotoTexturedMeshBuilder {
         let rgbHeight: Int
         let camPos: SIMD3<Float>
         let image: UIImage
+        /// 0...1 average luminance — used for dark/bright adaptive scoring
+        let meanLuma: Float
     }
 
     struct BuildResult {
@@ -32,7 +34,7 @@ enum PhotoTexturedMeshBuilder {
     static var progressHandler: ((Double, String) -> Void)?
 
     /// Hard ceiling so bake never hangs on phone
-    private static let bakeDeadlineSeconds: CFTimeInterval = 28
+    private static let bakeDeadlineSeconds: CFTimeInterval = 32
     /// Depth colors for hole fill (set only during buildScene)
     private static var bakeDepthSamples: [(SIMD3<Float>, SIMD3<Float>)] = []
 
@@ -182,7 +184,7 @@ enum PhotoTexturedMeshBuilder {
 
             // Prefer every triangle — only thin extreme tiles (holes > speed)
             var triStep = 1
-            if triCount > 120_000 { triStep = 2 }
+            if triCount > 160_000 { triStep = 2 }
             if triUsed > triBudget { triStep = 2 }
 
             var remap = [Int: UInt32]()
@@ -331,34 +333,65 @@ enum PhotoTexturedMeshBuilder {
 
         var bestW: Float = -1
         var bestC: (UInt8, UInt8, UInt8)?
+        var bestLuma: Float = 0.5
 
-        // Search newest first; stop early once we have a strong match
+        // Prefer well-exposed samples (works dark rooms + bright outdoors)
         for kf in keyframes.reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.05 || dist > 7 { continue }
+            if dist < 0.05 || dist > 8 { continue }
             let viewDir = toCam / max(dist, 1e-4)
             let facing = abs(simd_dot(normal, viewDir))
-            if facing < 0.05 { continue }
+            if facing < 0.04 { continue }
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
             if view.z > -0.04 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
+
+            let expQ = sampleExposureQuality(c)
+            if expQ < 0.08 { continue } // skip pure black / blown white
+
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
-            let w = Float(facing) * (1 / max(dist, 0.2)) * (0.4 + 0.6 * center)
+            // Slight preference for mid-luma frames; still accept dark/bright if sample is good
+            let frameQ: Float = 0.75 + 0.25 * frameExposureQuality(kf.meanLuma)
+            let w = Float(facing) * (1 / max(dist, 0.2)) * (0.35 + 0.65 * center) * expQ * frameQ
             if w > bestW {
                 bestW = w
                 bestC = c
-                if w > 1.2 { break } // good enough
+                bestLuma = kf.meanLuma
+                if w > 2.2 { break }
             }
         }
-        if let c = bestC { return mildEnhance(c) }
+        if let c = bestC {
+            return adaptiveEnhance(c, sceneLuma: bestLuma)
+        }
 
-        // Fallback: nearest depth color (fills dark/shiny holes cleanly)
         if let dc = nearestDepthColor(world) {
-            return mildEnhance(dc)
+            return adaptiveEnhance(dc, sceneLuma: 0.45)
         }
         return (170, 172, 176)
+    }
+
+    /// 0...1 — how usable is this pixel (reject crushed blacks / blown highlights)
+    private static func sampleExposureQuality(_ c: (UInt8, UInt8, UInt8)) -> Float {
+        let y = (Float(c.0) + Float(c.1) + Float(c.2)) / (3 * 255)
+        let sat = (max(c.0, max(c.1, c.2)) - min(c.0, min(c.1, c.2)))
+        // Blown white with no chroma
+        if y > 0.97, sat < 12 { return 0.05 }
+        // Crushed black
+        if y < 0.04 { return 0.08 }
+        if y < 0.12 { return 0.45 }
+        if y > 0.92 { return 0.5 }
+        // Sweet spot
+        if y > 0.18, y < 0.85 { return 1.0 }
+        return 0.75
+    }
+
+    private static func frameExposureQuality(_ meanLuma: Float) -> Float {
+        // Prefer mid-exposed frames; still allow dark/bright
+        if meanLuma > 0.2, meanLuma < 0.75 { return 1.0 }
+        if meanLuma > 0.12, meanLuma < 0.88 { return 0.7 }
+        return 0.45
     }
 
     private static func nearestDepthColor(_ world: SIMD3<Float>) -> (UInt8, UInt8, UInt8)? {
@@ -562,14 +595,42 @@ enum PhotoTexturedMeshBuilder {
     }
 
     private static func mildEnhance(_ c: (UInt8, UInt8, UInt8)) -> (UInt8, UInt8, UInt8) {
-        // Gentle contrast + saturation for clearer paint without washout
-        func f(_ x: UInt8) -> Float {
-            let v = (Float(x) / 255 - 0.5) * 1.14 + 0.5
-            return min(1, max(0, v))
+        adaptiveEnhance(c, sceneLuma: 0.5)
+    }
+
+    /// Dark rooms: lift shadows. Bright outdoor: tame highlights. Always keep color.
+    private static func adaptiveEnhance(
+        _ c: (UInt8, UInt8, UInt8),
+        sceneLuma: Float
+    ) -> (UInt8, UInt8, UInt8) {
+        var r = Float(c.0) / 255
+        var g = Float(c.1) / 255
+        var b = Float(c.2) / 255
+        let y = (r + g + b) / 3
+
+        if sceneLuma < 0.32 || y < 0.28 {
+            // Dark environment / dark surface — gentle shadow lift (not washed)
+            let lift: Float = 0.12
+            r = min(1, r + lift * (1 - r))
+            g = min(1, g + lift * (1 - g))
+            b = min(1, b + lift * (1 - b))
+        } else if sceneLuma > 0.72 || y > 0.82 {
+            // Bright outdoor / sun — soft highlight compression
+            func soft(_ v: Float) -> Float {
+                if v < 0.7 { return v }
+                return 0.7 + (v - 0.7) * 0.55
+            }
+            r = soft(r); g = soft(g); b = soft(b)
         }
-        var r = f(c.0), g = f(c.1), b = f(c.2)
+
+        // Clarity: mild contrast + saturation
+        let mid = (r + g + b) / 3
+        let contrast: Float = 1.16
+        r = min(1, max(0, mid + (r - mid) * contrast))
+        g = min(1, max(0, mid + (g - mid) * contrast))
+        b = min(1, max(0, mid + (b - mid) * contrast))
         let avg = (r + g + b) / 3
-        let sat: Float = 1.12
+        let sat: Float = 1.14
         r = min(1, max(0, avg + (r - avg) * sat))
         g = min(1, max(0, avg + (g - avg) * sat))
         b = min(1, max(0, avg + (b - avg) * sat))
@@ -674,18 +735,36 @@ enum PhotoTexturedMeshBuilder {
     private static func selectKeyframes(_ all: [Keyframe], limit: Int) -> [Keyframe] {
         guard !all.isEmpty else { return [] }
         guard all.count > limit else { return all }
+
+        // Always keep recent frames
         var result: [Keyframe] = []
-        let recent = min((limit * 3) / 4, all.count)
-        result.append(contentsOf: all.suffix(recent))
-        let older = Array(all.dropLast(recent))
+        let recentN = min((limit * 2) / 3, all.count)
+        result.append(contentsOf: all.suffix(recentN))
+
+        // Fill remaining with exposure diversity (dark + mid + bright)
+        let older = Array(all.dropLast(recentN))
         let need = limit - result.count
         if need > 0, !older.isEmpty {
-            for i in 0..<need {
-                let idx = i * older.count / need
-                result.append(older[min(idx, older.count - 1)])
+            let dark = older.filter { $0.meanLuma < 0.35 }.suffix(need / 3)
+            let bright = older.filter { $0.meanLuma > 0.65 }.suffix(need / 3)
+            let mid = older.filter { $0.meanLuma >= 0.35 && $0.meanLuma <= 0.65 }
+            result.append(contentsOf: dark)
+            result.append(contentsOf: bright)
+            let still = need - dark.count - bright.count
+            if still > 0, !mid.isEmpty {
+                for i in 0..<still {
+                    let idx = i * mid.count / still
+                    result.append(mid[min(idx, mid.count - 1)])
+                }
             }
         }
-        return result
+        // Dedupe by timestamp
+        var seen = Set<TimeInterval>()
+        var unique: [Keyframe] = []
+        for k in result {
+            if seen.insert(k.capturedAt).inserted { unique.append(k) }
+        }
+        return unique
     }
 
     static func makeKeyframe(
@@ -694,9 +773,12 @@ enum PhotoTexturedMeshBuilder {
         viewport: CGSize,
         maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
-        // Cap live keyframe size for bake speed
-        let cap = min(maxWidth, 800)
-        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap) else { return nil }
+        let cap = min(maxWidth, MeshDensityConfig.keyframeMaxWidth)
+        guard var (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap) else { return nil }
+
+        // Adaptive levels for dark rooms vs bright outdoor before bake
+        let mean = applyAdaptiveLevels(&rgb, width: w, height: h)
+
         let cam = frame.camera
         let camPos = SIMD3<Float>(
             cam.transform.columns.3.x,
@@ -713,8 +795,49 @@ enum PhotoTexturedMeshBuilder {
             rgbWidth: w,
             rgbHeight: h,
             camPos: camPos,
-            image: UIImage()
+            image: UIImage(),
+            meanLuma: mean
         )
+    }
+
+    /// Lift shadows in dark frames; tame whites in bright outdoor frames.
+    /// Returns mean luma 0...1 after adjustment.
+    private static func applyAdaptiveLevels(
+        _ rgb: inout [UInt8],
+        width: Int,
+        height: Int
+    ) -> Float {
+        let n = width * height
+        guard n > 0, rgb.count >= n * 3 else { return 0.5 }
+
+        // Sample mean luma (every 8th pixel for speed)
+        var sum: Float = 0
+        var cnt = 0
+        var i = 0
+        while i < n {
+            let o = i * 3
+            sum += (Float(rgb[o]) + Float(rgb[o + 1]) + Float(rgb[o + 2])) / (3 * 255)
+            cnt += 1
+            i += 8
+        }
+        let mean = cnt > 0 ? sum / Float(cnt) : 0.5
+
+        if mean > 0.28, mean < 0.7 {
+            return mean // already good — no global remap
+        }
+
+        // Dark: gamma < 1 lifts midtones; Bright: gamma > 1 compresses
+        let gamma: Float = mean < 0.28 ? 0.78 : 1.25
+        let invG = 1.0 / gamma
+        for p in 0..<n {
+            let o = p * 3
+            for c in 0..<3 {
+                let v = Float(rgb[o + c]) / 255
+                let out = pow(max(v, 0), invG)
+                rgb[o + c] = UInt8(min(255, max(0, out * 255)))
+            }
+        }
+        return mean
     }
 
     private static func extractRGB(buffer: CVPixelBuffer, maxWidth: Int) -> ([UInt8], Int, Int)? {

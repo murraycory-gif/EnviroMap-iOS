@@ -813,8 +813,16 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         config.environmentTexturing = .automatic
         config.planeDetection = [.horizontal, .vertical]
+        config.isLightEstimationEnabled = true
+        // Better outdoor/indoor auto exposure when device supports it
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             config.frameSemantics.insert(.sceneDepth)
+        }
+        if #available(iOS 16.0, *) {
+            // Prefer smoothed depth for denser outdoor reconstruction when available
+            if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+                // Keep raw sceneDepth only — smoothed can reduce outdoor range on some devices
+            }
         }
         // Smoother tracking → better mesh continuity
 
@@ -1071,18 +1079,19 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             autoreleasepool { ingestKeyframe(from: frame) }
         }
 
-        // DENSEST-MESH bank — copy SYNCHRONOUSLY (ARMesh buffers invalid after callback)
-        if ts - lastMeshCopyTime >= 1.0, !meshBankBusy {
+        // DENSEST-MESH bank — sync copy only (ARMesh buffers invalid after callback)
+        if ts - lastMeshCopyTime >= MeshDensityConfig.meshBankInterval, !meshBankBusy {
             lastMeshCopyTime = ts
             meshBankBusy = true
             let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+            let tileN = MeshDensityConfig.meshBankTilesPerTick
             var copied: [CapturedMeshChunk] = []
-            copied.reserveCapacity(min(meshes.count, 8))
+            copied.reserveCapacity(min(meshes.count, tileN))
             let ranked = meshes.sorted {
                 $0.geometry.vertices.count > $1.geometry.vertices.count
             }
             autoreleasepool {
-                for mesh in ranked.prefix(8) {
+                for mesh in ranked.prefix(tileN) {
                     if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: true) {
                         copied.append(chunk)
                     }
@@ -1099,7 +1108,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         // Depth color samples (ARFrame retained by closure — OK)
-        if ts - lastDepthTime >= 0.65, !depthBusy {
+        if ts - lastDepthTime >= MeshDensityConfig.depthIngestInterval, !depthBusy {
             lastDepthTime = ts
             depthBusy = true
             let held = frame
@@ -1294,12 +1303,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         // Memory guard during long scans
         let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
-        if verts > 900_000 {
+        if verts > 1_200_000 {
             let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
             var keep: [UUID: CapturedMeshChunk] = [:]
             var v = 0
             for c in ranked {
-                if v > 700_000 { break }
+                if v > 950_000 { break }
                 keep[c.id] = c
                 v += c.positions.count
             }
@@ -1325,7 +1334,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let dStride = CVPixelBufferGetBytesPerRow(depthMap)
 
         // Sparse sample for speed/memory (~every 6th pixel)
-        let step = 8
+        let step = MeshDensityConfig.depthSampleStep
         var local: [UInt64: ColoredDepthPoint] = [:]
         local.reserveCapacity((dw / step) * (dh / step) / 2)
 
@@ -1406,12 +1415,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             depthPoints[k] = p
         }
         // Cap memory ~120k points
-        if depthPoints.count > 60_000 {
+        if depthPoints.count > 100_000 {
             // Drop random half of oldest by rebuilding from suffix of keys
             let keys = Array(depthPoints.keys)
             var keep: [UInt64: ColoredDepthPoint] = [:]
-            keep.reserveCapacity(40_000)
-            for k in keys.suffix(40_000) {
+            keep.reserveCapacity(70_000)
+            for k in keys.suffix(70_000) {
                 if let p = depthPoints[k] { keep[k] = p }
             }
             depthPoints = keep
@@ -1430,7 +1439,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // liveBank: keep most detail but soft-cap huge tiles so mid-scan never freezes
         let step: Int
         if liveBank {
-            step = vCount > 40_000 ? 2 : 1
+            step = vCount > 55_000 ? 2 : 1
         } else if fullQuality {
             step = 1  // finish harvest — keep every vertex
         } else {
