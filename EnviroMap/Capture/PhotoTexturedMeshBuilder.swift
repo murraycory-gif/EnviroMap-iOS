@@ -140,7 +140,13 @@ enum PhotoTexturedMeshBuilder {
         var vcTris = 0
 
         // Prefer smaller detail chunks first
-        let ordered = chunks.sorted { $0.positions.count > $1.positions.count }  // big surfaces first
+        // ARKit mesh first (no prebaked colors), then any extras — never let fill wipe the room
+        let ordered = chunks.sorted { a, b in
+            let aDepth = a.colors != nil
+            let bDepth = b.colors != nil
+            if aDepth != bDepth { return !aDepth && bDepth }
+            return a.positions.count > b.positions.count
+        }
 
         for (ci, chunk) in ordered.enumerated() {
             // NEVER skip chunks — timeout only skips expensive coloring
