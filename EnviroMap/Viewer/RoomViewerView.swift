@@ -198,6 +198,9 @@ struct MeshSceneView: UIViewRepresentable {
     func updateUIView(_ uiView: SCNView, context: Context) {}
 
     final class Coordinator {
+        weak var view: SCNView?
+        var didLoad = false
+
         /// Frame camera on the actual mesh so user sees the scan immediately (not empty sky).
         static func frameMesh(in view: SCNView, scene: SCNScene) {
             // Ensure materials visible
