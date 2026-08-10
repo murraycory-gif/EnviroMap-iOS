@@ -92,14 +92,19 @@ struct FullEnvironmentScanView: View {
 
             Spacer()
 
-            // Simple status only — no mesh jargon
+            // Status + build stamp (easy to verify)
             if model.phase == .scanning {
-                Text(model.simpleStatusTitle)
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.black.opacity(0.45), in: Capsule())
+                VStack(spacing: 4) {
+                    Text(model.simpleStatusTitle)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text(BuildStamp.id)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.45), in: Capsule())
             }
 
             Spacer()
@@ -1012,16 +1017,19 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         let liveMeshCount = frame.anchors.compactMap { $0 as? ARMeshAnchor }.count
 
-        // Warm-up only: copy mesh while under threshold, then STOP copying (no freeze)
+        // Mesh copy: fast while warming up, then rare updates (more coverage, less freeze)
         let warmUp = stored < MeshDensityConfig.liveMeshCopyUntilChunks
-        if warmUp, ts - lastMeshCopyTime >= MeshDensityConfig.meshCopyInterval {
+        let meshInterval = warmUp
+            ? MeshDensityConfig.meshCopyInterval
+            : MeshDensityConfig.postWarmupMeshInterval
+        if ts - lastMeshCopyTime >= meshInterval {
             lastMeshCopyTime = ts
             autoreleasepool { ingestMeshes(from: frame) }
             emitStats(meshCount: max(stored, liveMeshCount), frameCount: framesN)
             return
         }
 
-        // After warm-up: keyframes only + progress from live ARKit counts
+        // Color keyframes while walking
         let pos = SIMD3<Float>(
             frame.camera.transform.columns.3.x,
             frame.camera.transform.columns.3.y,
@@ -1029,7 +1037,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         )
         var moving = false
         if let prev = lastCamPos {
-            moving = simd_length(pos - prev) > 0.015
+            moving = simd_length(pos - prev) > 0.012
         }
         lastCamPos = pos
 
@@ -1039,7 +1047,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             autoreleasepool { ingestKeyframe(from: frame) }
         }
 
-        if ts - lastStatsEmit >= 0.45 {
+        if ts - lastStatsEmit >= 0.4 {
             stateLock.lock()
             let fn = keyframes.count
             let sn = chunks.count
@@ -1151,7 +1159,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
         // Always live-size (never 960 mid-scan)
-        let width = min(MeshDensityConfig.keyframeMaxWidth, 400)
+        let width = MeshDensityConfig.keyframeMaxWidth
         guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
             from: frame,
             orientation: orientation,

@@ -85,11 +85,11 @@ struct ToolsHomeView: View {
                     .padding(.bottom, 4)
 
                     ScrollView(showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 14) {
                             Text("Map Your Space")
-                                .font(.system(size: 26, weight: .bold, design: .rounded))
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
                                 .foregroundStyle(AppTheme.text)
-                                .padding(.top, 8)
+                                .padding(.top, 4)
 
                             // Primary stack: Full 3D Scan → 3D View → My Rooms
                             Button {
@@ -199,29 +199,29 @@ struct ToolsHomeView: View {
             ZStack {
                 Circle()
                     .fill(.white.opacity(0.22))
-                    .frame(width: 72, height: 72)
+                    .frame(width: 80, height: 80)
                 Image(systemName: icon)
-                    .font(.system(size: 30, weight: .bold))
+                    .font(.system(size: 34, weight: .bold))
                     .foregroundStyle(.white)
             }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(title)
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
                 Text(subtitle)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .opacity(0.95)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             Image(systemName: "arrow.right.circle.fill")
-                .font(.system(size: 34))
+                .font(.system(size: 38))
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 20)
-        .frame(maxWidth: .infinity, minHeight: 120)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 26)
+        .frame(maxWidth: .infinity, minHeight: 148)
         .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: gradient
@@ -231,7 +231,7 @@ struct ToolsHomeView: View {
                         endPoint: .bottomTrailing
                     )
                 )
-                .shadow(color: AppTheme.blue.opacity(0.35), radius: 16, y: 7)
+                .shadow(color: AppTheme.blue.opacity(0.4), radius: 18, y: 8)
         )
         .contentShape(Rectangle())
     }

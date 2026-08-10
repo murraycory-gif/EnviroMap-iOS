@@ -221,7 +221,7 @@ enum PhotoTexturedMeshBuilder {
         ambient.name = "viewerAmbient"
         ambient.light = SCNLight()
         ambient.light?.type = .ambient
-        ambient.light?.intensity = 1400
+        ambient.light?.intensity = 900
         scene.rootNode.addChildNode(ambient)
 
         normalizeForPreview(scene)
@@ -237,69 +237,79 @@ enum PhotoTexturedMeshBuilder {
     ) -> (UInt8, UInt8, UInt8) {
         guard !keyframes.isEmpty else { return (190, 190, 195) }
 
+        // Prefer the SINGLE best sharp frame (multi-blend made colors blurry)
+        var bestW: Float = -1
+        var bestC: (UInt8, UInt8, UInt8)?
         var rSum: Float = 0, gSum: Float = 0, bSum: Float = 0, wSum: Float = 0
         var hits = 0
 
-        // Prefer newer frames (usually better aimed at current surfaces)
         for kf in keyframes.reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.08 || dist > 8 { continue }
+            if dist < 0.06 || dist > 6.5 { continue }
 
             let viewDir = toCam / max(dist, 1e-4)
-            // abs — AR mesh normals can flip
             let facing = abs(simd_dot(normal, viewDir))
-            if facing < 0.02 { continue }
+            if facing < 0.05 { continue }
 
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-            if view.z > -0.05 { continue } // behind near plane
+            if view.z > -0.04 { continue }
 
             let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
             guard projected.x.isFinite, projected.y.isFinite else { continue }
 
             let vpW = max(kf.viewport.width, 1)
             let vpH = max(kf.viewport.height, 1)
-            // Normalized viewport → normalized camera image (handles portrait/landscape)
             let vpNorm = CGPoint(x: projected.x / vpW, y: projected.y / vpH)
             let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
             guard imgNorm.x.isFinite, imgNorm.y.isFinite else { continue }
-            // Small margin so we still color edges of objects
-            guard imgNorm.x >= -0.02, imgNorm.x <= 1.02, imgNorm.y >= -0.02, imgNorm.y <= 1.02 else { continue }
+            guard imgNorm.x >= 0.01, imgNorm.x <= 0.99, imgNorm.y >= 0.01, imgNorm.y <= 0.99 else { continue }
 
-            let u = min(1, max(0, imgNorm.x))
-            let v = min(1, max(0, imgNorm.y))
-            guard let c = sampleBilinear(kf, u: Float(u), v: Float(v)) else { continue }
+            let u = Float(imgNorm.x)
+            let v = Float(imgNorm.y)
+            guard let c = sampleBilinear(kf, u: u, v: v) else { continue }
 
-            let center = Float((1 - abs(u - 0.5)) * (1 - abs(v - 0.5)))
-            let w = Float(facing) * (1.0 / max(dist, 0.25)) * (0.35 + 0.65 * center)
+            // Strong preference: closer + face-on + near image center (sharpest)
+            let center = (1 - abs(u - 0.5)) * (1 - abs(v - 0.5))
+            let w = Float(facing * facing) * (1.0 / max(dist * dist, 0.04)) * (0.25 + 0.75 * center)
+            if w > bestW {
+                bestW = w
+                bestC = c
+            }
+            // Keep top 2 only for slight denoise without blur
             rSum += Float(c.0) * w
             gSum += Float(c.1) * w
             bSum += Float(c.2) * w
             wSum += w
             hits += 1
-            if hits >= 8 { break }
+            if hits >= 2 { break }
         }
 
-        if wSum < 1e-5 {
-            // Last resort: nearest camera sample without facing filter
-            for kf in keyframes.reversed() {
-                let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
-                let vpW = max(kf.viewport.width, 1)
-                let vpH = max(kf.viewport.height, 1)
-                let vpNorm = CGPoint(x: projected.x / vpW, y: projected.y / vpH)
-                let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
-                if imgNorm.x >= 0, imgNorm.x <= 1, imgNorm.y >= 0, imgNorm.y <= 1,
-                   let c = sampleBilinear(kf, u: Float(imgNorm.x), v: Float(imgNorm.y)) {
-                    return boostSaturation(c)
-                }
+        if let best = bestC, bestW > 0 {
+            // Sharp path: primary color from best frame
+            if hits <= 1 || wSum < 1e-5 {
+                return boostSaturation(best)
             }
-            return (175, 178, 182)
+            // Blend only top-2 lightly toward best (reduces noise, keeps detail)
+            let r = UInt8(min(255, max(0, 0.65 * Float(best.0) + 0.35 * (rSum / wSum))))
+            let g = UInt8(min(255, max(0, 0.65 * Float(best.1) + 0.35 * (gSum / wSum))))
+            let b = UInt8(min(255, max(0, 0.65 * Float(best.2) + 0.35 * (bSum / wSum))))
+            return boostSaturation((r, g, b))
         }
 
-        let r = UInt8(min(255, max(0, rSum / wSum)))
-        let g = UInt8(min(255, max(0, gSum / wSum)))
-        let b = UInt8(min(255, max(0, bSum / wSum)))
-        return boostSaturation((r, g, b))
+        // Last resort
+        for kf in keyframes.reversed() {
+            let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
+            let vpW = max(kf.viewport.width, 1)
+            let vpH = max(kf.viewport.height, 1)
+            let vpNorm = CGPoint(x: projected.x / vpW, y: projected.y / vpH)
+            let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
+            if imgNorm.x >= 0, imgNorm.x <= 1, imgNorm.y >= 0, imgNorm.y <= 1,
+               let c = sampleBilinear(kf, u: Float(imgNorm.x), v: Float(imgNorm.y)) {
+                return boostSaturation(c)
+            }
+        }
+        return (175, 178, 182)
     }
 
     /// Bilinear sample in normalized image coords (0…1).
@@ -347,7 +357,7 @@ enum PhotoTexturedMeshBuilder {
         let d = maxC - minC
         if d > 0.02 {
             let s = d / max(1 - abs(2 * l - 1), 0.001)
-            let s2 = min(1, s * 1.18) // gentle sat
+            let s2 = min(1, s * 1.22)
             // Convert back roughly via lerp toward gray
             let gray = l
             let t = s2 / max(s, 0.001)
@@ -357,7 +367,7 @@ enum PhotoTexturedMeshBuilder {
         }
         // Slight contrast
         func contrast(_ x: Float) -> Float {
-            let y = (x - 0.5) * 1.06 + 0.5
+            let y = (x - 0.5) * 1.1 + 0.5
             return min(1, max(0, y))
         }
         return (
@@ -431,7 +441,7 @@ enum PhotoTexturedMeshBuilder {
             amb.name = "viewerAmbient"
             amb.light = SCNLight()
             amb.light?.type = .ambient
-            amb.light?.intensity = 1500
+            amb.light?.intensity = 900
             scene.rootNode.addChildNode(amb)
         }
 
