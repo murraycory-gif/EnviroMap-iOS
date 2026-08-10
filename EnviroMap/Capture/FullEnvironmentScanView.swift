@@ -19,8 +19,10 @@ struct FullEnvironmentScanView: View {
             Color(red: 0.06, green: 0.08, blue: 0.14).ignoresSafeArea()
 
             switch model.phase {
-            case .idle, .scanning, .processing, .failed:
+            case .idle, .scanning, .failed:
                 scanCameraLayer
+            case .processing:
+                processingLayer
             case .preview, .saving:
                 previewLayer
             }
@@ -573,6 +575,8 @@ final class FullEnvironmentScanModel: ObservableObject {
     @Published var previewMeshURL: URL?
     @Published var previewScene: SCNScene?
     @Published var viewResetToken: Int = 0
+    @Published var bakeProgress: Double = 0
+    @Published var bakeStatus: String = "Preparing…"
 
     let controller = FullEnvScanController()
 
@@ -617,27 +621,50 @@ final class FullEnvironmentScanModel: ObservableObject {
         phase = .processing
         statusTitle = "Processing"
         instruction = "Building your 3D view…"
+        bakeProgress = 0.02
+        bakeStatus = "Locking scan data…"
         controller.stopCapturing()
         previewImage = controller.snapshot()
         controller.forceFinalHarvest()
+        bakeProgress = 0.08
+        bakeStatus = "Preparing color bake…"
 
+        let ctrl = controller
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            // Build scene only first (fast path to Review)
-            let result = self.controller.buildExportFast()
+
+            PhotoTexturedMeshBuilder.progressHandler = { [weak self] p, msg in
+                DispatchQueue.main.async {
+                    self?.bakeProgress = min(max(p, 0.08), 0.99)
+                    self?.bakeStatus = msg
+                }
+            }
+
+            let result = ctrl.buildExportFast()
+            PhotoTexturedMeshBuilder.progressHandler = nil
+
             DispatchQueue.main.async {
-                if let result {
+                if let result, let scene = result.scene, !scene.rootNode.childNodes.isEmpty {
                     self.exportPayload = result
                     self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
-                    self.previewScene = result.scene
+                    self.previewScene = scene
+                    self.bakeProgress = 1
+                    self.bakeStatus = "Ready"
                     self.phase = .preview
                     self.statusTitle = "Review"
                     self.instruction = "Drag to spin · Pinch to zoom"
                     self.controller.stop()
-                    // Write file in background so Save is ready without blocking UI
                     self.controller.persistExportInBackground(result)
                 } else {
-                    self.phase = .failed("Not enough mesh. Scan longer and cover more surfaces.")
+                    // Never silent-fail: show actionable error
+                    let mc = self.meshChunks
+                    let fc = self.hasColorFrames
+                    self.phase = .failed(
+                        mc == 0
+                        ? "No mesh captured. Move closer and scan until blue lines cover objects."
+                        : "Could not build the 3D view (\(mc) mesh pieces). Try a slower circle around the object."
+                    )
+                    _ = fc
                 }
             }
         }
@@ -755,21 +782,17 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // Full-density harvest for export (cars / furniture need every triangle)
+        // Merge full-quality copies into existing store (never wipe if harvest fails)
         if let frame = arView?.session.currentFrame {
             ingestKeyframe(from: frame)
-            var full: [UUID: CapturedMeshChunk] = [:]
+            stateLock.lock()
             for a in frame.anchors {
                 guard let mesh = a as? ARMeshAnchor else { continue }
                 if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
-                    full[chunk.id] = chunk
+                    chunks[chunk.id] = chunk
                 }
             }
-            if !full.isEmpty {
-                stateLock.lock()
-                chunks = full
-                stateLock.unlock()
-            }
+            stateLock.unlock()
         }
     }
 
