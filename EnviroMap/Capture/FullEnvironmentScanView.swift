@@ -740,7 +740,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastBankIdTime: [UUID: TimeInterval] = [:]
     private var lastCamPos: SIMD3<Float>?
     private var lastStatsEmit: TimeInterval = 0
-    private var maxKeyframes: Int { MeshDensityConfig.maxKeyframes }
+    private var maxKeyframes: Int { min(56, MeshDensityConfig.maxKeyframes) }
     private var maxChunks: Int { MeshDensityConfig.maxChunks }
     private var coverageRoot: SCNNode?
     private var lastMarkerUpdate: TimeInterval = 0
@@ -976,13 +976,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard let mesh = anchor as? ARMeshAnchor else { return }
-        // Rare densest upgrade (~1.2s/tile) — more coverage, still smooth
-        bankMeshNow(mesh, minInterval: 1.2)
-        guard showBlueMesh else { return }
+        // No mesh bank on update — reading geometry mid-update caused EXC_BAD_ACCESS freezes.
+        // Coverage comes from didAdd + Finish harvest.
+        guard showBlueMesh, let mesh = anchor as? ARMeshAnchor else { return }
         let id = mesh.identifier
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[id], now - last < 1.2 { return }
+        if let last = lastVizTime[id], now - last < 1.5 { return }
         lastVizTime[id] = now
         applyBlueWire(node: node, mesh: mesh)
     }
@@ -1038,42 +1037,62 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     private static func wireGeometry(_ mesh: ARMeshGeometry) -> SCNGeometry? {
         let vCount = mesh.vertices.count
-        guard vCount > 0, mesh.faces.count > 0, vCount < 40_000 else { return nil }
-        var positions = [Float](repeating: 0, count: vCount * 3)
+        let fCount = mesh.faces.count
+        guard vCount > 0, fCount > 0, vCount < 25_000 else { return nil }
+        let vSrc = mesh.vertices
+        let vBase = vSrc.buffer.contents()
+        let vLen = vSrc.buffer.length
+        guard vSrc.stride >= MemoryLayout<SIMD3<Float>>.size else { return nil }
+
+        var positions = [Float]()
+        positions.reserveCapacity(vCount * 3)
         for i in 0..<vCount {
-            let p = mesh.vertices.buffer.contents()
-                .advanced(by: mesh.vertices.offset + mesh.vertices.stride * i)
-                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
-            positions[i * 3] = p.x
-            positions[i * 3 + 1] = p.y
-            positions[i * 3 + 2] = p.z
+            let off = vSrc.offset + vSrc.stride * i
+            guard off + MemoryLayout<SIMD3<Float>>.size <= vLen else { break }
+            let p = vBase.advanced(by: off).assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            guard p.x.isFinite, p.y.isFinite, p.z.isFinite else { continue }
+            positions.append(contentsOf: [p.x, p.y, p.z])
         }
+        let vc = positions.count / 3
+        guard vc > 2 else { return nil }
+
         let posData = positions.withUnsafeBufferPointer { Data(buffer: $0) }
         let source = SCNGeometrySource(
-            data: posData, semantic: .vertex, vectorCount: vCount,
-            usesFloatComponents: true, componentsPerVector: 3,
-            bytesPerComponent: 4, dataOffset: 0, dataStride: 12
+            data: posData, semantic: .vertex, vectorCount: vc,
+            usesFloatComponents: true, componentsPerVector: 3, bytesPerComponent: 4,
+            dataOffset: 0, dataStride: 12
         )
-        var indices = [UInt32]()
-        let faces = mesh.faces
-        // Subsample triangles for smooth 60fps blue mesh
-        let faceStep = MeshDensityConfig.blueWireFaceStep(faceCount: faces.count)
-        for f in stride(from: 0, to: faces.count, by: faceStep) {
-            for c in 0..<faces.indexCountPerPrimitive {
-                let off = (f * faces.indexCountPerPrimitive + c) * faces.bytesPerIndex
-                let base = faces.buffer.contents().advanced(by: off)
-                if faces.bytesPerIndex == 2 {
-                    indices.append(UInt32(base.assumingMemoryBound(to: UInt16.self).pointee))
-                } else {
-                    indices.append(base.assumingMemoryBound(to: UInt32.self).pointee)
-                }
+
+        // Sparse lines for overlay only
+        let fSrc = mesh.faces
+        let fBase = fSrc.buffer.contents()
+        let fLen = fSrc.buffer.length
+        let bpi = fSrc.bytesPerIndex
+        let idxPer = fSrc.indexCountPerPrimitive
+        guard bpi == 2 || bpi == 4, idxPer >= 3 else { return nil }
+        let faceStep = MeshDensityConfig.blueWireFaceStep(faceCount: fCount)
+        var idx: [UInt32] = []
+        idx.reserveCapacity((fCount / faceStep) * 6)
+        for f in stride(from: 0, to: fCount, by: faceStep) {
+            var tri: [UInt32] = []
+            for c in 0..<3 {
+                let off = (f * idxPer + c) * bpi
+                guard off + bpi <= fLen else { tri = []; break }
+                let base = fBase.advanced(by: off)
+                let raw = bpi == 2
+                    ? Int(base.assumingMemoryBound(to: UInt16.self).pointee)
+                    : Int(base.assumingMemoryBound(to: UInt32.self).pointee)
+                guard raw >= 0, raw < vc else { tri = []; break }
+                tri.append(UInt32(raw))
             }
+            guard tri.count == 3 else { continue }
+            idx.append(contentsOf: [tri[0], tri[1], tri[1], tri[2], tri[2], tri[0]])
         }
-        guard !indices.isEmpty else { return nil }
-        let iData = indices.withUnsafeBufferPointer { Data(buffer: $0) }
+        guard !idx.isEmpty else { return nil }
+        let idxData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
         let element = SCNGeometryElement(
-            data: iData, primitiveType: .triangles,
-            primitiveCount: indices.count / 3, bytesPerIndex: 4
+            data: idxData, primitiveType: .line, primitiveCount: idx.count / 2,
+            bytesPerIndex: 4
         )
         let geom = SCNGeometry(sources: [source], elements: [element])
         let mat = SCNMaterial()
@@ -1085,12 +1104,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         return geom
     }
 
+
     // MARK: ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isRunning else { return }
         let ts = frame.timestamp
 
+        // Count only — never copy mesh geometry here (that froze mid-scan)
         let liveMeshCount = frame.anchors.compactMap { $0 as? ARMeshAnchor }.count
 
         let pos = SIMD3<Float>(
@@ -1100,71 +1121,26 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         )
         var moving = false
         if let prev = lastCamPos {
-            moving = simd_length(pos - prev) > 0.01
+            moving = simd_length(pos - prev) > 0.012
         }
         lastCamPos = pos
 
-        // Color frames — more often while moving
+        // Color frames — light + capped (do not retain ARFrame)
         let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
         if ts - lastKeyframeTime >= kfI {
             lastKeyframeTime = ts
-            autoreleasepool { ingestKeyframe(from: frame) }
+            autoreleasepool { ingestKeyframe(from: frame, highRes: false) }
         }
 
-        // DENSEST-MESH bank — copy ALL current tiles (sync; buffers only valid here)
-        // Soft time budget: if many tiles, still cycle through over successive ticks
-        if ts - lastMeshCopyTime >= MeshDensityConfig.meshBankInterval, !meshBankBusy {
-            lastMeshCopyTime = ts
-            meshBankBusy = true
-            let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            var copied: [CapturedMeshChunk] = []
-            copied.reserveCapacity(meshes.count)
-            // Round-robin: don't always only take the 12 biggest (that starved walls/floors)
-            let sorted = meshes.sorted { $0.identifier.uuidString < $1.identifier.uuidString }
-            let start = Int(ts * 10) % max(sorted.count, 1)
-            var ordered: [ARMeshAnchor] = []
-            if !sorted.isEmpty {
-                ordered = Array(sorted[start...]) + Array(sorted[..<start])
-            }
-            let limit = min(ordered.count, MeshDensityConfig.meshBankTilesPerTick)
-            autoreleasepool {
-                for mesh in ordered.prefix(limit) {
-                    if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: true) {
-                        copied.append(chunk)
-                    }
-                }
-            }
-            if !copied.isEmpty {
-                captureQueue.async { [weak self] in
-                    self?.mergeDensestChunks(copied)
-                    DispatchQueue.main.async { self?.meshBankBusy = false }
-                }
-            } else {
-                meshBankBusy = false
-            }
-        }
-
-        // Depth color samples (ARFrame retained by closure — OK)
-        if ts - lastDepthTime >= MeshDensityConfig.depthIngestInterval, !depthBusy {
-            lastDepthTime = ts
-            depthBusy = true
-            let held = frame
-            captureQueue.async { [weak self] in
-                self?.ingestDepthPoints(from: held)
-                DispatchQueue.main.async { self?.depthBusy = false }
-            }
-        }
-
-        if ts - lastStatsEmit >= 0.35 {
+        // Stats only
+        if ts - lastStatsEmit >= 0.45 {
             stateLock.lock()
             let stored = chunks.count
             let fn = keyframes.count
-            let dp = depthPoints.count
             stateLock.unlock()
-            // Progress uses max(live, stored) so bank growth shows up
             emitStats(meshCount: max(liveMeshCount, stored, 1), frameCount: fn)
-            _ = dp
         }
+        // NEVER hold `frame` across async — ARSession freezes when frames pile up
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
@@ -1471,23 +1447,32 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false, liveBank: Bool = false) -> CapturedMeshChunk? {
+        // Defensive: ARKit can invalidate geometry mid-read → EXC_BAD_ACCESS without bounds checks
         let geom = anchor.geometry
         let vSource = geom.vertices
         let nSource = geom.normals
         let faces = geom.faces
         let vCount = vSource.count
-        guard vCount > 0, faces.count > 0 else { return nil }
+        let fCount = faces.count
+        guard vCount > 0, fCount > 0 else { return nil }
+        guard vSource.stride >= MemoryLayout<SIMD3<Float>>.size else { return nil }
 
-        // liveBank: keep most detail but soft-cap huge tiles so mid-scan never freezes
         let step: Int
         if liveBank {
-            // Keep denser bank — only thin extreme tiles
-            step = vCount > 45_000 ? 2 : 1
+            step = vCount > 20_000 ? 2 : 1  // light mid-scan bank only
         } else if fullQuality {
-            step = 1  // Finish = every vertex
+            step = 1
         } else {
             step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }
+
+        let vBuf = vSource.buffer
+        let vBase = vBuf.contents()
+        let vLen = vBuf.length
+        let nBuf = nSource.buffer
+        let nBase = nBuf.contents()
+        let nLen = nBuf.length
+        let hasNormals = nSource.count == vCount && nSource.stride >= MemoryLayout<SIMD3<Float>>.size
 
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
@@ -1497,39 +1482,57 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         remap.reserveCapacity(vCount / max(step, 1) + 1)
 
         for i in stride(from: 0, to: vCount, by: step) {
-            let vp = vSource.buffer.contents().advanced(by: vSource.offset + vSource.stride * i)
-            positions.append(vp.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
-            if nSource.count == vCount {
-                let np = nSource.buffer.contents().advanced(by: nSource.offset + nSource.stride * i)
-                normals.append(np.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
+            let vOff = vSource.offset + vSource.stride * i
+            guard vOff + MemoryLayout<SIMD3<Float>>.size <= vLen else { break }
+            let vp = vBase.advanced(by: vOff).assumingMemoryBound(to: SIMD3<Float>.self).pointee
+            // Skip NaNs / insane verts
+            if !vp.x.isFinite || !vp.y.isFinite || !vp.z.isFinite { continue }
+            positions.append(vp)
+            if hasNormals {
+                let nOff = nSource.offset + nSource.stride * i
+                if nOff + MemoryLayout<SIMD3<Float>>.size <= nLen {
+                    let np = nBase.advanced(by: nOff).assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                    normals.append(np.x.isFinite ? np : SIMD3(0, 1, 0))
+                } else {
+                    normals.append(SIMD3(0, 1, 0))
+                }
             } else {
                 normals.append(SIMD3(0, 1, 0))
             }
             remap[i] = positions.count - 1
         }
+        guard !positions.isEmpty else { return nil }
+
+        let fBuf = faces.buffer
+        let fBase = fBuf.contents()
+        let fLen = fBuf.length
+        let idxPer = faces.indexCountPerPrimitive
+        let bpi = faces.bytesPerIndex
+        guard idxPer >= 3, bpi == 2 || bpi == 4 else { return nil }
 
         var indices = [UInt32]()
-        let faceStep = 1  // never drop faces on harvest
-        indices.reserveCapacity(max(1, faces.count / faceStep) * faces.indexCountPerPrimitive)
-        for f in stride(from: 0, to: faces.count, by: faceStep) {
+        indices.reserveCapacity(fCount * 3)
+        for f in 0..<fCount {
             var tri = [UInt32]()
             tri.reserveCapacity(3)
             var ok = true
-            for c in 0..<faces.indexCountPerPrimitive {
-                let off = (f * faces.indexCountPerPrimitive + c) * faces.bytesPerIndex
-                let base = faces.buffer.contents().advanced(by: off)
+            for c in 0..<idxPer {
+                let off = (f * idxPer + c) * bpi
+                guard off + bpi <= fLen else { ok = false; break }
+                let base = fBase.advanced(by: off)
                 let raw: Int
-                if faces.bytesPerIndex == 2 {
+                if bpi == 2 {
                     raw = Int(base.assumingMemoryBound(to: UInt16.self).pointee)
                 } else {
                     raw = Int(base.assumingMemoryBound(to: UInt32.self).pointee)
                 }
+                guard raw >= 0, raw < vCount else { ok = false; break }
                 let snapped = (raw / step) * step
                 guard let mapped = remap[snapped] else { ok = false; break }
                 tri.append(UInt32(mapped))
             }
-            if ok, tri.count == 3, tri[0] != tri[1], tri[1] != tri[2] {
-                indices.append(contentsOf: tri)
+            if ok, tri.count >= 3, tri[0] != tri[1], tri[1] != tri[2] {
+                indices.append(contentsOf: tri.prefix(3))
             }
         }
         guard !indices.isEmpty else { return nil }

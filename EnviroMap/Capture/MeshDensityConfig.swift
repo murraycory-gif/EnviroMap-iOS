@@ -11,7 +11,7 @@ enum MeshDensityConfig {
         movingFast ? 0.12 : 0.18
     }
 
-    static var maxKeyframes: Int { 100 }
+    static var maxKeyframes: Int { 64 }
     static var maxChunks: Int { 12_000 }
 
     /// Live scan uses this (smaller = smoother)
@@ -33,7 +33,7 @@ enum MeshDensityConfig {
     static var quantizeShift: Int { 2 }
 
     /// Rare full bank sweep during walk (smooth)
-    static var meshBankInterval: TimeInterval { 1.0 }
+    static var meshBankInterval: TimeInterval { 999 }
     static var meshBankTilesPerTick: Int { 32 }
 
     static var depthSampleStep: Int { 5 }
