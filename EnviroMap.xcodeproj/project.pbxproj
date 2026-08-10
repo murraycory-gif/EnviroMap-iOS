@@ -109,6 +109,7 @@
 				B01 /* EnviroMapApp.swift */,
 				B02 /* RootView.swift */,
 				B12 /* MainHubView.swift */,
+				B22 /* SettingsView.swift */,
 				B11 /* OnboardingView.swift */,
 				B1C /* AppTheme.swift */,
 				B1D /* EnviroMapLogo.swift */,
@@ -152,7 +153,6 @@
 				B1F /* DenseMeshCollector.swift */,
 				B20 /* FullEnvironmentScanView.swift */,
 				B21 /* PhotoTexturedMeshBuilder.swift */,
-				B22 /* SettingsView.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
