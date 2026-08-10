@@ -626,7 +626,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         guard phase == .scanning else { return }
         phase = .processing
         statusTitle = "Processing"
-        instruction = "Building Your 3D View…"
+        instruction = "AI Building Full Space…"
         bakeProgress = 0.02
         bakeStatus = "Locking Scan…"
         controller.stopCapturing()
@@ -646,7 +646,7 @@ final class FullEnvironmentScanModel: ObservableObject {
 
             DispatchQueue.main.async {
                 self.bakeProgress = 0.2
-                self.bakeStatus = "Painting Real Colors…"
+                self.bakeStatus = "AI Hybrid Color + Texture…"
             }
 
             PhotoTexturedMeshBuilder.progressHandler = { [weak self] p, msg in
