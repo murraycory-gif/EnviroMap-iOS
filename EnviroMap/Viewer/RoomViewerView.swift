@@ -173,7 +173,7 @@ struct MeshSceneView: UIViewRepresentable {
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView(frame: .zero)
         view.backgroundColor = .clear
-        view.autoenablesDefaultLighting = false
+        view.autoenablesDefaultLighting = true
         view.allowsCameraControl = true
         view.antialiasingMode = .multisampling4X
         view.preferredFramesPerSecond = 60
@@ -233,6 +233,7 @@ struct MeshSceneView: UIViewRepresentable {
                         guard let geos = node.geometry else { return }
                         for mat in geos.materials {
                             mat.lightingModel = .constant
+                            mat.fillMode = .fill
                             mat.isDoubleSided = true
                             mat.shaderModifiers = [:]
                         }

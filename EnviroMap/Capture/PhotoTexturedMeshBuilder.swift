@@ -72,7 +72,7 @@ enum PhotoTexturedMeshBuilder {
         progressHandler?(0.05, "Gathering surfaces…")
 
         // Prefer recent, well-spaced frames (fast + sharp)
-        let kfs = selectKeyframes(keyframes, limit: 24)
+        let kfs = selectKeyframes(keyframes, limit: 32)
         // If no keyframes, still build gray mesh so user sees shape
         let hasColor = !kfs.isEmpty
 
@@ -84,10 +84,10 @@ enum PhotoTexturedMeshBuilder {
         var tris: [Tri] = []
         var est = 0
         for c in chunks { est += c.indices.count / 3 }
-        tris.reserveCapacity(min(est, 120_000))
+        tris.reserveCapacity(min(est, 200_000))
 
         // Global triangle budget — prevents freeze/OOM, keeps objects
-        let budget = 100_000
+        let budget = 180_000
         let strideTri = est > budget ? max(1, (est + budget - 1) / budget) : 1
 
         for chunk in chunks {
@@ -320,6 +320,7 @@ enum PhotoTexturedMeshBuilder {
         mat.lightingModel = .constant
         mat.isDoubleSided = true
         mat.writesToDepthBuffer = true
+        mat.fillMode = .fill
         mat.diffuse.contents = UIColor(
             red: CGFloat(color.0) / 255,
             green: CGFloat(color.1) / 255,

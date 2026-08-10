@@ -327,127 +327,111 @@ struct FullEnvironmentScanView: View {
 
     private var previewLayer: some View {
         ZStack {
-            AppTheme.bg.ignoresSafeArea()
+            // Full-screen 3D is the product — not a tiny card
+            Color.black.ignoresSafeArea()
 
-            // Soft blue wash like Home
-            LinearGradient(
-                colors: [
-                    AppTheme.blue.opacity(0.10),
-                    AppTheme.bg,
-                    AppTheme.blueSoft.opacity(0.35),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
+            if let scene = model.previewScene {
+                PreviewMeshView(scene: scene, resetToken: model.viewResetToken)
+                    .ignoresSafeArea()
+            } else if let url = model.previewMeshURL {
+                PreviewMeshView(url: url, resetToken: model.viewResetToken)
+                    .ignoresSafeArea()
+            } else {
+                ProgressView()
+                    .tint(.white)
+            }
 
+            // Top chrome
             VStack(spacing: 0) {
-                // Top bar
                 HStack {
+                    // Delete / discard
                     Button {
                         model.rescan()
                     } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                            Text("Rescan")
-                        }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AppTheme.blue)
+                        Image(systemName: "trash.fill")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                            .background(Color.red.opacity(0.85), in: Circle())
                     }
+                    .accessibilityLabel("Delete Scan")
+
                     Spacer()
-                    Text("Review Scan")
+
+                    Text("Your Scan")
                         .font(.headline.weight(.bold))
-                        .foregroundStyle(AppTheme.text)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+
                     Spacer()
-                    Color.clear.frame(width: 64)
+
+                    // Save
+                    Button {
+                        save()
+                    } label: {
+                        Group {
+                            if model.phase == .saving {
+                                ProgressView().tint(.white)
+                            } else {
+                                Image(systemName: "square.and.arrow.down.fill")
+                                    .font(.body.weight(.semibold))
+                            }
+                        }
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(
+                            LinearGradient(
+                                colors: [AppTheme.blue, AppTheme.blueDeep],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            in: Circle()
+                        )
+                    }
+                    .disabled(didSave || model.phase == .saving)
+                    .accessibilityLabel("Save Scan")
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                .padding(.top, 8)
 
-                // Large 3D viewer
-                ZStack {
-                    RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous)
-                        .fill(Color(red: 0.08, green: 0.09, blue: 0.12))
-                        .shadow(color: .black.opacity(0.12), radius: 16, y: 6)
+                Spacer()
 
-                    if let scene = model.previewScene {
-                        PreviewMeshView(scene: scene, resetToken: model.viewResetToken)
-                            .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
-                    } else if let url = model.previewMeshURL {
-                        PreviewMeshView(url: url, resetToken: model.viewResetToken)
-                            .clipShape(RoundedRectangle(cornerRadius: AppTheme.radiusL, style: .continuous))
-                    } else {
-                        ProgressView()
-                            .tint(AppTheme.blue)
-                    }
-
-                    VStack {
-                        HStack {
-                            Spacer()
-                            Text("Full Color")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(AppTheme.blue.opacity(0.9), in: Capsule())
-                        }
-                        .padding(12)
-                        Spacer()
-                        // Controls
-                        HStack(spacing: 10) {
-                            viewControl(icon: "arrow.triangle.2.circlepath", title: "Reset") {
-                                model.viewResetToken += 1
-                            }
-                            viewControl(icon: "hand.draw.fill", title: "Drag Spin")
-                            viewControl(icon: "arrow.up.left.and.arrow.down.right", title: "Pinch Zoom")
-                        }
-                        .padding(12)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .frame(maxHeight: .infinity)
-
-                // Bottom save card
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Looks Good?")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(AppTheme.text)
-
-                    Text("Check the colors and coverage. Rescan if there are big holes, or save to My Rooms.")
-                        .font(.subheadline)
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Name")
+                // Bottom sheet: name + actions
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Label("Drag To Spin · Pinch To Zoom", systemImage: "hand.draw.fill")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(AppTheme.textTertiary)
-                        TextField("Room Name", text: $name)
-                            .padding(14)
-                            .background(
-                                RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
-                                    .fill(AppTheme.bg)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
-                                    .stroke(AppTheme.cardBorder, lineWidth: 1)
-                            )
-                            .foregroundStyle(AppTheme.text)
+                            .foregroundStyle(.white.opacity(0.85))
+                        Spacer()
+                        Text("Full Color")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(AppTheme.blue)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.white, in: Capsule())
                     }
 
-                    HStack(spacing: 12) {
+                    Text("Name")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                    TextField("Space name", text: $name)
+                        .textFieldStyle(.plain)
+                        .padding(14)
+                        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .foregroundStyle(.white)
+
+                    HStack(spacing: 10) {
                         Button {
                             model.rescan()
                         } label: {
                             Text("Rescan")
                                 .font(.headline.weight(.semibold))
-                                .foregroundStyle(AppTheme.blue)
+                                .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 16)
-                                .background(
-                                    RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous)
-                                        .stroke(AppTheme.blue.opacity(0.35), lineWidth: 1.5)
-                                )
+                                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: AppTheme.radiusM, style: .continuous))
                         }
 
                         Button {
@@ -479,15 +463,22 @@ struct FullEnvironmentScanView: View {
                 .padding(18)
                 .background(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .fill(AppTheme.card)
-                        .shadow(color: .black.opacity(0.08), radius: 20, y: -2)
+                        .fill(Color.black.opacity(0.72))
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 )
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
                 .padding(.bottom, 16)
             }
         }
-        .preferredColorScheme(.light)
+        .preferredColorScheme(.dark)
+        .alert("Could Not Save", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveError ?? "")
+        }
     }
 
     private func save() {
@@ -496,7 +487,6 @@ struct FullEnvironmentScanView: View {
             return
         }
         model.phase = .saving
-        // Ensure scn is on disk (Review may have shown before write finished)
         let scnURL = payload.directory.appendingPathComponent(payload.fileName)
         if !FileManager.default.fileExists(atPath: scnURL.path), let scene = payload.scene {
             _ = PhotoTexturedMeshBuilder.writeScene(scene, to: payload.directory, name: payload.fileName)
@@ -548,26 +538,34 @@ struct PreviewMeshView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> SCNView {
-        let v = SCNView()
-        v.backgroundColor = UIColor(red: 0.09, green: 0.10, blue: 0.13, alpha: 1)
+        let v = SCNView(frame: .zero)
+        v.backgroundColor = UIColor(red: 0.07, green: 0.08, blue: 0.11, alpha: 1)
         v.allowsCameraControl = true
-        v.autoenablesDefaultLighting = false
+        v.autoenablesDefaultLighting = true
         v.antialiasingMode = .multisampling4X
-        // Natural orbit (turntable) — easier than free camera
+        v.preferredFramesPerSecond = 60
+        v.isPlaying = true
+        v.rendersContinuously = true
         v.defaultCameraController.interactionMode = .orbitTurntable
         v.defaultCameraController.inertiaEnabled = true
-        v.defaultCameraController.maximumVerticalAngle = 85
-        v.defaultCameraController.minimumVerticalAngle = -10
+        v.defaultCameraController.maximumVerticalAngle = 89
+        v.defaultCameraController.minimumVerticalAngle = -89
         context.coordinator.scnView = v
 
         if let scene {
-            prepare(scene)
+            Self.prepare(scene)
             v.scene = scene
-            context.coordinator.fitCamera(in: v, scene: scene)
+            // Fit after layout so bounds are valid
+            DispatchQueue.main.async {
+                context.coordinator.fitCamera(in: v, scene: scene)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                context.coordinator.fitCamera(in: v, scene: scene)
+            }
         } else if let url {
             DispatchQueue.global(qos: .userInitiated).async {
                 if let scene = try? SCNScene(url: url, options: nil) {
-                    prepare(scene)
+                    Self.prepare(scene)
                     DispatchQueue.main.async {
                         v.scene = scene
                         context.coordinator.fitCamera(in: v, scene: scene)
@@ -579,6 +577,12 @@ struct PreviewMeshView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: SCNView, context: Context) {
+        // Assign scene if it arrived after view created
+        if let scene, uiView.scene !== scene {
+            Self.prepare(scene)
+            uiView.scene = scene
+            context.coordinator.fitCamera(in: uiView, scene: scene)
+        }
         if context.coordinator.lastReset != resetToken {
             context.coordinator.lastReset = resetToken
             if let scene = uiView.scene {
@@ -587,16 +591,36 @@ struct PreviewMeshView: UIViewRepresentable {
         }
     }
 
-    private func prepare(_ scene: SCNScene) {
-        scene.background.contents = UIColor(red: 0.09, green: 0.10, blue: 0.13, alpha: 1)
+    static func prepare(_ scene: SCNScene) {
+        scene.background.contents = UIColor(red: 0.07, green: 0.08, blue: 0.11, alpha: 1)
         scene.rootNode.enumerateChildNodes { node, _ in
-            guard let mats = node.geometry?.materials else { return }
-            for mat in mats {
-                // Keep colors; lambert shows form
+            guard let geos = node.geometry else { return }
+            for mat in geos.materials {
                 mat.lightingModel = .constant
                 mat.isDoubleSided = true
+                mat.writesToDepthBuffer = true
+                mat.readsFromDepthBuffer = true
+                mat.fillMode = .fill
                 mat.shaderModifiers = [:]
+                // Ensure diffuse is never nil
+                if mat.diffuse.contents == nil {
+                    mat.diffuse.contents = UIColor(white: 0.7, alpha: 1)
+                }
             }
+            // Force solid fill
+            if geos.firstMaterial != nil {
+                geos.firstMaterial?.fillMode = .fill
+            }
+        }
+        // Ambient so constant materials stay bright
+        if scene.rootNode.childNode(withName: "viewerAmbient", recursively: false) == nil {
+            let amb = SCNNode()
+            amb.name = "viewerAmbient"
+            amb.light = SCNLight()
+            amb.light?.type = .ambient
+            amb.light?.intensity = 1200
+            amb.light?.color = UIColor.white
+            scene.rootNode.addChildNode(amb)
         }
     }
 
@@ -605,48 +629,83 @@ struct PreviewMeshView: UIViewRepresentable {
         var lastReset: Int = -1
 
         func fitCamera(in view: SCNView, scene: SCNScene) {
-            // Prefer mesh root bounds
             let target = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
-            let (minB, maxB) = target.boundingBox
-            let center = SCNVector3(
-                (minB.x + maxB.x) * 0.5,
-                (minB.y + maxB.y) * 0.5,
-                (minB.z + maxB.z) * 0.5
-            )
-            let dx = maxB.x - minB.x
-            let dy = maxB.y - minB.y
-            let dz = maxB.z - minB.z
-            let radius = max(max(dx, dy), dz) * 0.55
-            let dist = max(CGFloat(radius) * 2.4, 0.8)
+
+            // Prefer geometry-computed bounds (more reliable than empty bbox)
+            var minV = SIMD3<Float>(repeating: Float.greatestFiniteMagnitude)
+            var maxV = SIMD3<Float>(repeating: -Float.greatestFiniteMagnitude)
+            var found = false
+            target.enumerateChildNodes { node, _ in
+                guard let g = node.geometry else { return }
+                let (bmin, bmax) = g.boundingBox
+                let corners = [
+                    SCNVector3(bmin.x, bmin.y, bmin.z),
+                    SCNVector3(bmax.x, bmin.y, bmin.z),
+                    SCNVector3(bmin.x, bmax.y, bmin.z),
+                    SCNVector3(bmin.x, bmin.y, bmax.z),
+                    SCNVector3(bmax.x, bmax.y, bmax.z),
+                ]
+                for c in corners {
+                    let w = node.convertPosition(c, to: scene.rootNode)
+                    minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
+                    maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
+                    found = true
+                }
+            }
+
+            let center: SCNVector3
+            var radius: Float = 1.5
+            if found && (maxV.x - minV.x).isFinite {
+                center = SCNVector3(
+                    (minV.x + maxV.x) * 0.5,
+                    (minV.y + maxV.y) * 0.5,
+                    (minV.z + maxV.z) * 0.5
+                )
+                radius = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z)) * 0.55
+                radius = max(radius, 0.4)
+            } else {
+                let (minB, maxB) = target.boundingBox
+                center = SCNVector3(
+                    (minB.x + maxB.x) * 0.5,
+                    (minB.y + maxB.y) * 0.5,
+                    (minB.z + maxB.z) * 0.5
+                )
+                radius = max(maxB.x - minB.x, max(maxB.y - minB.y, maxB.z - minB.z)) * 0.55
+                radius = max(radius, 0.4)
+            }
+
+            let dist = radius * 2.6
+
+            // Remove old cameras
+            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
 
             let cam = SCNNode()
+            cam.name = "previewCam"
             cam.camera = SCNCamera()
-            cam.camera?.fieldOfView = 50
+            cam.camera?.fieldOfView = 55
             cam.camera?.zNear = 0.01
             cam.camera?.zFar = 500
             cam.position = SCNVector3(
-                center.x + Float(dist) * 0.45,
-                center.y + Float(dist) * 0.35,
-                center.z + Float(dist) * 0.85
+                center.x + dist * 0.55,
+                center.y + dist * 0.35,
+                center.z + dist * 0.9
             )
-            // Aim at center without look(at:) API variance
-            let dxp = center.x - cam.position.x
-            let dyp = center.y - cam.position.y
-            let dzp = center.z - cam.position.z
-            let yaw = atan2(dxp, dzp)
-            let pitch = -atan2(dyp, sqrt(dxp * dxp + dzp * dzp))
+            // Aim at center
+            let dx = center.x - cam.position.x
+            let dy = center.y - cam.position.y
+            let dz = center.z - cam.position.z
+            let yaw = atan2(dx, dz)
+            let pitch = -atan2(dy, sqrt(dx * dx + dz * dz))
             cam.eulerAngles = SCNVector3(pitch, yaw, 0)
 
-            // Replace old camera nodes named previewCam
-            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
             scene.rootNode.addChildNode(cam)
             view.pointOfView = cam
-
             view.defaultCameraController.target = center
-            view.defaultCameraController.inertiaEnabled = true
+            view.defaultCameraController.pointOfView = cam
         }
     }
 }
+
 
 // MARK: - Model
 
