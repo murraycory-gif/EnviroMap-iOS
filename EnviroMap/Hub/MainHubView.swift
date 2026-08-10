@@ -106,7 +106,7 @@ struct ToolsHomeView: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("Full 3D Scan")
                                             .font(.title3.weight(.bold))
-                                        Text("Capture everything · real colors")
+                                        Text("Point camera · walk slowly")
                                             .font(.subheadline)
                                             .opacity(0.92)
                                     }
@@ -199,11 +199,11 @@ struct ToolsHomeView: View {
             .onChange(of: showScanner) { _, open in
                 if !open { store.loadIndex() }
             }
-            .alert("Scan a room first", isPresented: Binding(
+            .alert("Full 3D Scan first", isPresented: Binding(
                 get: { chipAlert != nil },
                 set: { if !$0 { chipAlert = nil } }
             )) {
-                Button("Start Full Scan") { showScanner = true }
+                Button("Scan now") { showScanner = true }
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(chipAlert ?? "")
@@ -313,13 +313,13 @@ struct ToolsHomeView: View {
             if let s = store.sessions.first(where: { $0.id == id }) {
                 RoomViewerView(session: s)
             } else {
-                needScanPlaceholder(title: "See 3D room", message: "Scan a room first, then open 3D.")
+                needScanPlaceholder(title: "See 3D room", message: "Full 3D Scan first, then open 3D.")
             }
         case .walkAR(let id):
             if let s = store.sessions.first(where: { $0.id == id }) {
                 ARWalkView(usdzURL: store.usdzURL(for: s))
             } else {
-                needScanPlaceholder(title: "Walk in AR", message: "Scan a room first, then walk in AR.")
+                needScanPlaceholder(title: "Walk in AR", message: "Full 3D Scan first, then walk in AR.")
             }
         case .pickSession(let purpose):
             SessionPickerView(purpose: purpose)
@@ -350,7 +350,7 @@ struct ToolsHomeView: View {
     private func openLatestMesh() {
         store.loadIndex()
         if store.sessions.isEmpty {
-            chipAlert = "Scan a room first. Then you can see it in 3D."
+            chipAlert = "Full 3D Scan first. Then you can see it in 3D."
             return
         }
         if store.sessions.count == 1, let s = store.sessions.first {
@@ -363,7 +363,7 @@ struct ToolsHomeView: View {
     private func openLatestWalkAR() {
         store.loadIndex()
         if store.sessions.isEmpty {
-            chipAlert = "Scan a room first. Then you can walk in AR."
+            chipAlert = "Full 3D Scan first. Then you can walk in AR."
             return
         }
         if store.sessions.count == 1, let s = store.sessions.first {
@@ -545,7 +545,7 @@ struct SessionPickerView: View {
                 ContentUnavailableView(
                     "No rooms yet",
                     systemImage: "camera.viewfinder",
-                    description: Text("Scan a room first.")
+                    description: Text("Full 3D Scan first.")
                 )
             }
         }

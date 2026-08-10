@@ -70,7 +70,7 @@ enum PhotoTexturedMeshBuilder {
     ) -> SCNScene? {
         guard !chunks.isEmpty, !keyframes.isEmpty else { return nil }
 
-        let kfs = selectKeyframes(keyframes, limit: 32)
+        let kfs = selectKeyframes(keyframes, limit: 40)
         let scene = SCNScene()
         scene.background.contents = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
 
@@ -141,7 +141,13 @@ enum PhotoTexturedMeshBuilder {
         guard vCount > 0, chunk.indices.count >= 3 else { return nil }
 
         // Cap huge chunks for speed (keep shape, thin density)
-        let strideV = vCount > 40_000 ? 2 : 1
+        let highDetail = UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
+        let strideV: Int
+        if highDetail {
+            strideV = vCount > 60_000 ? 2 : 1
+        } else {
+            strideV = vCount > 25_000 ? 2 : 1
+        }
 
         // Chunk center / normal for best keyframe
         var center = SIMD3<Float>(0, 0, 0)
@@ -270,12 +276,12 @@ enum PhotoTexturedMeshBuilder {
 
         // Photo texture when enough UVs landed; else solid average (never white void)
         let uvRatio = Float(uvHits) / Float(max(newVCount, 1))
-        if uvRatio > 0.15 {
+        if uvRatio > 0.08 {
             // Prefer file path for durable materials
             if let textureDir {
                 let texName = "tex_\(index).jpg"
                 let texURL = textureDir.appendingPathComponent(texName)
-                if let data = best.image.jpegData(compressionQuality: 0.72) {
+                if let data = best.image.jpegData(compressionQuality: 0.85) {
                     try? data.write(to: texURL, options: .atomic)
                     mat.diffuse.contents = texURL.path
                 } else {

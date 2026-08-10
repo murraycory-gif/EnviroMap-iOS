@@ -99,22 +99,40 @@ struct FullEnvironmentScanView: View {
                 .frame(maxWidth: .infinity)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
-            // Live capture status
+            // Live capture status + AI coach
             if model.phase == .scanning {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 10, height: 10)
-                    Text(model.meshChunks > 0
-                         ? "Capturing… \(model.meshChunks) surfaces saved"
-                         : "Point at a surface to start capturing")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                    Spacer()
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 10, height: 10)
+                        Text(model.meshChunks > 0
+                             ? "Mapping… \(model.meshChunks) surfaces"
+                             : "Point at a surface to start")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Text("BLUE = mapped")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(red: 0.4, green: 0.85, blue: 1))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.45), in: Capsule())
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(Color(red: 0.5, green: 0.8, blue: 1))
+                        Text(model.aiCoachTip)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.95))
+                            .lineLimit(2)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(red: 0.1, green: 0.25, blue: 0.45).opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.45), in: Capsule())
             }
 
             HStack(spacing: 10) {
@@ -548,6 +566,7 @@ final class FullEnvironmentScanModel: ObservableObject {
     @Published var detailLine = "LiDAR + real colors"
     @Published var meshChunks = 0
     @Published var coverageLabel = "—"
+    @Published var aiCoachTip = "Move slowly · AI is mapping surfaces"
     @Published var hasColorFrames = false
     @Published var previewImage: UIImage?
     @Published var exportPayload: ExportPayload?
@@ -572,6 +591,9 @@ final class FullEnvironmentScanModel: ObservableObject {
                 self?.meshChunks = chunks
                 self?.hasColorFrames = frames > 0
                 self?.coverageLabel = chunks > 80 ? "Great" : chunks > 35 ? "Good" : chunks > 12 ? "OK" : "Low"
+                if let tip = self?.controller.latestAITip, !tip.isEmpty {
+                    self?.aiCoachTip = tip
+                }
                 self?.detailLine = "\(chunks) mesh pieces · \(frames) color frames"
             }
         }
@@ -653,8 +675,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 36
-    private let maxChunks = 500
+    private let maxKeyframes = 48
+    private let maxChunks = 800
     private var coverageRoot: SCNNode?
     private var lastMarkerUpdate: TimeInterval = 0
 
@@ -674,7 +696,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         scn.rendersCameraGrain = false
         scn.delegate = self
         // Yellow feature points + we'll add blue mesh lines for coverage
-        scn.debugOptions = [.showFeaturePoints]
+        let blueOn = UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? true
+        scn.debugOptions = blueOn ? [] : [.showFeaturePoints]
         view.addSubview(scn)
         arView = scn
         let root = SCNNode()
@@ -697,6 +720,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         lastMeshCopyTime = 0
         lastStatsEmit = 0
         lastMarkerUpdate = 0
+        classCounts.removeAll()
+        latestAITip = "AI ready · point at your space"
         stateLock.unlock()
         DispatchQueue.main.async { [weak self] in
             self?.coverageRoot?.childNodes.forEach { $0.removeFromParentNode() }
@@ -802,6 +827,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         applyBlueWire(node: node, mesh: mesh)
+        noteClassification(from: mesh)
         // Also copy into our safe store
         if let chunk = Self.copyChunk(from: mesh) {
             stateLock.lock()
@@ -816,9 +842,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[mesh.identifier], now - last < 0.55 { return }
+        if let last = lastVizTime[mesh.identifier], now - last < 0.40 { return }
         lastVizTime[mesh.identifier] = now
         applyBlueWire(node: node, mesh: mesh)
+        noteClassification(from: mesh)
         if let chunk = Self.copyChunk(from: mesh) {
             stateLock.lock()
             chunks[chunk.id] = chunk
@@ -837,11 +864,31 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func applyBlueWire(node: SCNNode, mesh: ARMeshAnchor) {
-        // Lightweight: skip full wire rebuild (was main scan lag).
-        // User still sees yellow feature points + cyan coverage dots.
-        _ = mesh
-        _ = node
+        // Smooth blue mapping mesh (3D Snap style) — subsampled lines only
+        guard showBlueMesh else {
+            node.geometry = nil
+            return
+        }
+        guard let geom = Self.wireGeometry(mesh.geometry) else { return }
+        node.geometry = geom
     }
+
+    /// Read AI prefs each session
+    private var showBlueMesh: Bool {
+        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? true
+    }
+    private var highDetail: Bool {
+        UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
+    }
+    private var aiCoachEnabled: Bool {
+        let improve = UserDefaults.standard.object(forKey: "enviromap.ai.improveTools") as? Bool ?? true
+        let coach = UserDefaults.standard.object(forKey: "enviromap.scan.aiCoach") as? Bool ?? true
+        return improve && coach
+    }
+
+    private(set) var latestAITip: String = "Move slowly · cover everything you want in 3D"
+    private var classCounts: [String: Int] = [:]
+
 
     private static func wireGeometry(_ mesh: ARMeshGeometry) -> SCNGeometry? {
         let vCount = mesh.vertices.count
@@ -863,8 +910,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         )
         var indices = [UInt32]()
         let faces = mesh.faces
-        // Only take every other triangle for lighter wireframe
-        for f in stride(from: 0, to: faces.count, by: 1) {
+        // Subsample triangles for smooth 60fps blue mesh
+        let faceStep = faces.count > 8000 ? 3 : (faces.count > 3000 ? 2 : 1)
+        for f in stride(from: 0, to: faces.count, by: faceStep) {
             for c in 0..<faces.indexCountPerPrimitive {
                 let off = (f * faces.indexCountPerPrimitive + c) * faces.bytesPerIndex
                 let base = faces.buffer.contents().advanced(by: off)
@@ -898,13 +946,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let t = frame.timestamp
 
         // Copy mesh from frame anchors (throttled) — safe snapshot
-        if t - lastMeshCopyTime >= 0.20 {
+        if t - lastMeshCopyTime >= 0.35 {
             lastMeshCopyTime = t
             ingestMeshes(from: frame)
         }
 
         // Color keyframes (throttled)
-        if t - lastKeyframeTime >= 0.28 {
+        if t - lastKeyframeTime >= 0.22 {
             lastKeyframeTime = t
             ingestKeyframe(from: frame)
         }
@@ -944,8 +992,30 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let frameCount = keyframes.count
         stateLock.unlock()
 
+        updateAICoach(meshCount: meshCount)
         emitStats(meshCount: meshCount, frameCount: frameCount)
         updateCoverageMarkersIfNeeded()
+    }
+
+    private func updateAICoach(meshCount: Int) {
+        guard aiCoachEnabled else {
+            latestAITip = "Walk slowly · blue lines show mapped surfaces"
+            return
+        }
+        // AI tips based on coverage progress + classification mix
+        if meshCount < 5 {
+            latestAITip = "AI: Point at large surfaces first — floor and walls"
+        } else if meshCount < 20 {
+            latestAITip = "AI: Circle furniture slowly · fill blue over every side"
+        } else if meshCount < 45 {
+            latestAITip = "AI: Check gaps — dark corners and under objects"
+        } else if classCounts["floor", default: 0] < 3 {
+            latestAITip = "AI: Sweep the floor under tables and chairs"
+        } else if classCounts["wall", default: 0] < 3 {
+            latestAITip = "AI: Scan walls top-to-bottom for full room shape"
+        } else {
+            latestAITip = "AI: Coverage looking strong · keep filling holes"
+        }
     }
 
     /// Lightweight dots so user SEES capture progress (not heavy wireframe).
@@ -996,7 +1066,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             from: frame,
             orientation: orientation,
             viewport: viewport,
-            maxWidth: 400
+            maxWidth: (UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true) ? 480 : 320
         ) else { return }
 
         stateLock.lock()
@@ -1021,6 +1091,25 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     /// Deep-copy mesh buffers while the anchor is valid (during this callback only).
+
+    private func noteClassification(from mesh: ARMeshAnchor) {
+        guard aiCoachEnabled else { return }
+        // ARMeshClassification via geometry if available (iOS 14+)
+        let g = mesh.geometry
+        // faces with classification - optional path
+        // Use bounding box heuristic as AI assist fallback
+        let t = mesh.transform
+        let y = t.columns.3.y
+        if y < 0.35 {
+            classCounts["floor", default: 0] += 1
+        } else if y > 1.8 {
+            classCounts["ceiling", default: 0] += 1
+        } else {
+            classCounts["wall", default: 0] += 1
+        }
+        _ = g
+    }
+
     private static func copyChunk(from anchor: ARMeshAnchor) -> CapturedMeshChunk? {
         let geom = anchor.geometry
         let vSource = geom.vertices
@@ -1031,8 +1120,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // Soft cap — skip only extreme anchors
         guard vCount < 100_000 else { return nil }
 
-        // Subsample large meshes for smoother scanning / faster bake
-        let step = vCount > 25_000 ? 2 : 1
+        // Subsample large meshes for smoother scanning; keep denser when High Detail on
+        let hi = UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
+        let step = hi ? (vCount > 45_000 ? 2 : 1) : (vCount > 20_000 ? 2 : 1)
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
         positions.reserveCapacity(vCount / step + 1)

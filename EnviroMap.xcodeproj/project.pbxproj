@@ -38,6 +38,7 @@
 		A1E /* DenseMeshCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F /* DenseMeshCollector.swift */; };
 		A1F /* FullEnvironmentScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20 /* FullEnvironmentScanView.swift */; };
 		A20 /* PhotoTexturedMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21 /* PhotoTexturedMeshBuilder.swift */; };
+		A21 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B22 /* SettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -74,6 +75,7 @@
 		B1F /* DenseMeshCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DenseMeshCollector.swift; sourceTree = "<group>"; };
 		B20 /* FullEnvironmentScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullEnvironmentScanView.swift; sourceTree = "<group>"; };
 		B21 /* PhotoTexturedMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoTexturedMeshBuilder.swift; sourceTree = "<group>"; };
+		B22 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -150,6 +152,7 @@
 				B1F /* DenseMeshCollector.swift */,
 				B20 /* FullEnvironmentScanView.swift */,
 				B21 /* PhotoTexturedMeshBuilder.swift */,
+				B22 /* SettingsView.swift */,
 			);
 			path = Capture;
 			sourceTree = "<group>";
@@ -270,6 +273,7 @@
 				A1E /* DenseMeshCollector.swift in Sources */,
 				A1F /* FullEnvironmentScanView.swift in Sources */,
 				A20 /* PhotoTexturedMeshBuilder.swift in Sources */,
+				A21 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
