@@ -1067,7 +1067,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         // DENSEST-MESH bank: every ~0.55s keep denser copy of each tile
         // (low rate = no freeze, high coverage vs finish-only harvest)
-        if ts - lastMeshCopyTime >= 0.55 {
+        if ts - lastMeshCopyTime >= 0.45 {
             lastMeshCopyTime = ts
             let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
             if !meshes.isEmpty {
@@ -1078,7 +1078,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         // Scene-depth color points fill holes LiDAR mesh misses (cars, dark paint)
-        if ts - lastDepthTime >= 0.28 {
+        if ts - lastDepthTime >= 0.40 {
             lastDepthTime = ts
             captureQueue.async { [weak self] in
                 self?.ingestDepthPoints(from: frame)

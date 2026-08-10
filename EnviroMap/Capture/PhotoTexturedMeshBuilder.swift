@@ -33,6 +33,8 @@ enum PhotoTexturedMeshBuilder {
 
     /// Hard ceiling so bake never hangs on phone
     private static let bakeDeadlineSeconds: CFTimeInterval = 28
+    /// Depth colors for hole fill (set only during buildScene)
+    private static var bakeDepthSamples: [(SIMD3<Float>, SIMD3<Float>)] = []
 
     static func makeScene(
         chunks: [CapturedMeshChunk],
@@ -83,7 +85,22 @@ enum PhotoTexturedMeshBuilder {
 
         progressHandler?(0.06, "Preparing…")
 
-        // Fewer keyframes = much faster color + less RAM
+        // Depth → color samples only (no point cloud noise in viewer)
+        if depthPoints.isEmpty {
+            bakeDepthSamples = []
+        } else {
+            let step = max(1, depthPoints.count / 12_000)
+            var samples: [(SIMD3<Float>, SIMD3<Float>)] = []
+            samples.reserveCapacity(min(12_000, depthPoints.count))
+            var i = 0
+            while i < depthPoints.count {
+                let p = depthPoints[i]
+                samples.append((p.position, p.color))
+                i += step
+            }
+            bakeDepthSamples = samples
+        }
+
         let kfs = selectKeyframes(keyframes, limit: MeshDensityConfig.bakeKeyframeLimit)
         let photos: [UIImage?] = kfs.map { imageFromRGB($0.rgb, width: $0.rgbWidth, height: $0.rgbHeight) }
 
@@ -186,10 +203,11 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Photo texture only when VERY confident (avoids warp + is cheap early-out)
-                if texTris < 40_000,
+                // Photo texture OFF for clean solid look (was causing patchy warp)
+                // Vertex colors + depth color fill only
+                if false, texTris < 40_000,
                    let pick = bestProjection(world: mid, normal: nMid, keyframes: kfs),
-                   pick.score > 0.55,
+                   pick.score > 0.85,
                    photos[pick.index] != nil,
                    let uv0 = projectUV(world: w0, kf: kfs[pick.index]),
                    let uv1 = projectUV(world: w1, kf: kfs[pick.index]),
@@ -304,13 +322,8 @@ enum PhotoTexturedMeshBuilder {
             root.addChildNode(node)
         }
 
-        // Depth hole-fill points (fills black gaps mesh missed)
-        if !depthPoints.isEmpty {
-            progressHandler?(0.9, "Filling Gaps…")
-            if let fillNode = makeDepthFillNode(depthPoints) {
-                root.addChildNode(fillNode)
-            }
-        }
+        // Depth is used only as color samples (see colorAt) — never as grainy points
+        progressHandler?(0.9, "Polishing…")
 
         guard !root.childNodes.isEmpty else {
             progressHandler?(1, "No Mesh")
@@ -327,70 +340,13 @@ enum PhotoTexturedMeshBuilder {
 
         progressHandler?(0.95, "Framing…")
         normalizeForPreview(scene)
+        bakeDepthSamples = []
         progressHandler?(1.0, "Ready")
         let dt = CACurrentMediaTime() - t0
         print("[EnviroMap] hybrid \(String(format: "%.1f", dt))s tex=\(texTris) vc=\(vcTris) depth=\(depthPoints.count) kfs=\(kfs.count)")
         return scene
     }
 
-
-    /// Dense colored points that visually fill mesh holes (cars, dark paint, etc.)
-    private static func makeDepthFillNode(_ points: [ColoredDepthPoint]) -> SCNNode? {
-        let maxPts = 90_000
-        let step = max(1, points.count / maxPts)
-        var pos: [Float] = []
-        var col: [Float] = []
-        var idx: [UInt32] = []
-        pos.reserveCapacity(min(points.count, maxPts) * 3)
-        col.reserveCapacity(min(points.count, maxPts) * 4)
-
-        var i: UInt32 = 0
-        var n = 0
-        while n < points.count {
-            let p = points[n]
-            pos.append(contentsOf: [p.position.x, p.position.y, p.position.z])
-            col.append(contentsOf: [p.color.x, p.color.y, p.color.z, 1])
-            idx.append(i)
-            i += 1
-            n += step
-        }
-        guard !pos.isEmpty else { return nil }
-
-        let posData = pos.withUnsafeBufferPointer { Data(buffer: $0) }
-        let colData = col.withUnsafeBufferPointer { Data(buffer: $0) }
-        let idxData = idx.withUnsafeBufferPointer { Data(buffer: $0) }
-        let sources = [
-            SCNGeometrySource(
-                data: posData, semantic: .vertex, vectorCount: pos.count / 3,
-                usesFloatComponents: true, componentsPerVector: 3,
-                bytesPerComponent: 4, dataOffset: 0, dataStride: 12
-            ),
-            SCNGeometrySource(
-                data: colData, semantic: .color, vectorCount: col.count / 4,
-                usesFloatComponents: true, componentsPerVector: 4,
-                bytesPerComponent: 4, dataOffset: 0, dataStride: 16
-            ),
-        ]
-        let element = SCNGeometryElement(
-            data: idxData, primitiveType: .point,
-            primitiveCount: idx.count, bytesPerIndex: 4
-        )
-        element.pointSize = 8
-        element.minimumPointScreenSpaceRadius = 2
-        element.maximumPointScreenSpaceRadius = 10
-
-        let geom = SCNGeometry(sources: sources, elements: [element])
-        let mat = SCNMaterial()
-        mat.lightingModel = .constant
-        mat.isDoubleSided = true
-        mat.diffuse.contents = UIColor.white
-        mat.locksAmbientWithDiffuse = true
-        geom.materials = [mat]
-
-        let node = SCNNode(geometry: geom)
-        node.name = "depthFill"
-        return node
-    }
 
     // MARK: - Fast color (single best frame, limited search)
 
@@ -425,7 +381,33 @@ enum PhotoTexturedMeshBuilder {
             }
         }
         if let c = bestC { return mildEnhance(c) }
+
+        // Fallback: nearest depth color (fills dark/shiny holes cleanly)
+        if let dc = nearestDepthColor(world) {
+            return mildEnhance(dc)
+        }
         return (170, 172, 176)
+    }
+
+    private static func nearestDepthColor(_ world: SIMD3<Float>) -> (UInt8, UInt8, UInt8)? {
+        let samples = bakeDepthSamples
+        guard !samples.isEmpty else { return nil }
+        var bestD: Float = 0.12 * 0.12  // 12cm
+        var best: SIMD3<Float>?
+        // Small search — samples already capped
+        for (sp, sc) in samples {
+            let d = simd_length_squared(world - sp)
+            if d < bestD {
+                bestD = d
+                best = sc
+            }
+        }
+        guard let sc = best else { return nil }
+        return (
+            UInt8(min(255, max(0, sc.x * 255))),
+            UInt8(min(255, max(0, sc.y * 255))),
+            UInt8(min(255, max(0, sc.z * 255)))
+        )
     }
 
     /// O(verts × small samples) with hard deadline — never hangs.
