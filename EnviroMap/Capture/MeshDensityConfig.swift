@@ -12,7 +12,7 @@ enum MeshDensityConfig {
     }
 
     static var maxKeyframes: Int { 110 }
-    static var maxChunks: Int { 7000 }
+    static var maxChunks: Int { 9000 }
     /// Higher res keyframes = clearer surfaces
     static var keyframeMaxWidth: Int { 960 }
 
@@ -31,8 +31,8 @@ enum MeshDensityConfig {
     static var quantizeShift: Int { 2 }
 
     /// Live mesh bank: how often / how many tiles (safe, sync copy)
-    static var meshBankInterval: TimeInterval { 0.55 }
-    static var meshBankTilesPerTick: Int { 24 }
+    static var meshBankInterval: TimeInterval { 0.40 }
+    static var meshBankTilesPerTick: Int { 48 }
 
     /// Depth hole-fill sample density (lower step = denser)
     static var depthSampleStep: Int { 5 }

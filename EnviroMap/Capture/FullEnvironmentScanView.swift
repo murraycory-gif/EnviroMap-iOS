@@ -874,17 +874,17 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             var all = chunks
             stateLock.unlock()
 
-            // 4 densify passes — ARKit fills gaps when phone is still
-            for pass in 0..<4 {
+            // 5 densify passes — hold still; ARKit fills gaps between pulls
+            for pass in 0..<5 {
                 if let frame = session.currentFrame {
                     ingestKeyframe(from: frame)
                     merge(&all, pull(from: frame))
-                    if pass == 0 || pass == 3 {
+                    if pass == 0 || pass == 2 || pass == 4 {
                         ingestDepthPoints(from: frame)
                     }
                 }
-                if pass < 3 {
-                    Thread.sleep(forTimeInterval: 0.28)
+                if pass < 4 {
+                    Thread.sleep(forTimeInterval: 0.32)
                 }
             }
 
@@ -948,30 +948,47 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
-        // Lightweight blue wire once on add (not every frame = no freeze)
         applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
+        // Capture tile immediately while geometry buffers are valid
+        bankMeshNow(mesh, minInterval: 0.0)
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        // Throttle wire refresh — update at most every 0.8s per tile
         guard let mesh = anchor as? ARMeshAnchor else { return }
         let id = mesh.identifier
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[id], now - last < 0.8 {
+        if let last = lastVizTime[id], now - last < 0.75 {
+            // Still bank denser geometry periodically even if wire skipped
+            bankMeshNow(mesh, minInterval: 0.45)
             noteClassification(from: mesh)
             return
         }
         lastVizTime[id] = now
         applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
+        bankMeshNow(mesh, minInterval: 0.45)
+    }
+
+    /// Sync-copy one mesh tile into densest bank (ARMesh only valid here)
+    private func bankMeshNow(_ mesh: ARMeshAnchor, minInterval: TimeInterval) {
+        let id = mesh.identifier
+        let now = CACurrentMediaTime()
+        if minInterval > 0, let last = lastBankIdTime[id], now - last < minInterval {
+            return
+        }
+        lastBankIdTime[id] = now
+        guard let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: true) else { return }
+        // Merge on capture queue so we don't block ARKit long
+        captureQueue.async { [weak self] in
+            self?.mergeDensestChunks([chunk])
+        }
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didRemove node: SCNNode, for anchor: ARAnchor) {
+        // Keep densest bank forever during the scan.
+        // ARKit removes/re-adds mesh tiles constantly — deleting here caused holes.
         lastVizTime.removeValue(forKey: anchor.identifier)
-        stateLock.lock()
-        chunks.removeValue(forKey: anchor.identifier)
-        stateLock.unlock()
     }
 
     private func applyBlueWire(node: SCNNode, mesh: ARMeshAnchor) {
@@ -1442,7 +1459,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // liveBank: keep most detail but soft-cap huge tiles so mid-scan never freezes
         let step: Int
         if liveBank {
-            step = vCount > 80_000 ? 2 : 1
+            step = 1  // keep full tile density in bank
         } else if fullQuality {
             step = 1
         } else {
