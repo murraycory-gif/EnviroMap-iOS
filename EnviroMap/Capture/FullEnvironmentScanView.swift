@@ -916,20 +916,22 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
-        if showBlueMesh {
-            stateLock.lock()
-            let chunkCount = chunks.count
-            stateLock.unlock()
-            if chunkCount <= 30 {
-                applyBlueWire(node: node, mesh: mesh)
-            }
-        }
+        // Lightweight blue wire once on add (not every frame = no freeze)
+        applyBlueWire(node: node, mesh: mesh)
+        noteClassification(from: mesh)
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        // Never rebuild wire on updates — that was the freeze.
-        // Classification only, rarely.
+        // Throttle wire refresh — update at most every 0.8s per tile
         guard let mesh = anchor as? ARMeshAnchor else { return }
+        let id = mesh.identifier
+        let now = CACurrentMediaTime()
+        if let last = lastVizTime[id], now - last < 0.8 {
+            noteClassification(from: mesh)
+            return
+        }
+        lastVizTime[id] = now
+        applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
     }
 
@@ -953,7 +955,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     /// Read AI prefs each session
     private var showBlueMesh: Bool {
         // Default OFF — blue wire was a major freeze source. Settings can re-enable.
-        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? false
+        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? true
     }
     private var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
@@ -1060,32 +1062,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         DispatchQueue.main.async { [weak self] in
             self?.onError?(error.localizedDescription)
         }
-    }
-
-    // Live blue mesh = free ARKit coverage view (no geometry copy cost)
-    func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
-        guard anchor is ARMeshAnchor else { return }
-        styleCoverageNode(node)
-    }
-
-    func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard anchor is ARMeshAnchor else { return }
-        styleCoverageNode(node)
-    }
-
-    private func styleCoverageNode(_ node: SCNNode) {
-        let paint: (SCNNode) -> Void = { n in
-            guard let g = n.geometry else { return }
-            for m in g.materials {
-                m.diffuse.contents = UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 0.4)
-                m.transparency = 0.4
-                m.isDoubleSided = true
-                m.lightingModel = .constant
-                m.writesToDepthBuffer = true
-            }
-        }
-        paint(node)
-        node.enumerateChildNodes { child, _ in paint(child) }
     }
 
     private func ingestMeshes(from frame: ARFrame) {
