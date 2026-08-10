@@ -49,12 +49,12 @@ struct ToolsHomeView: View {
     /// 2-across grid items (measure + post-scan)
     private var gridItems: [HomeGridItem] {
         [
-            .init(title: "3D", subtitle: "View scan", icon: "cube.fill", needsScan: true, route: nil, action: .mesh),
-            .init(title: "Walk", subtitle: "AR walk", icon: "figure.walk", needsScan: true, route: nil, action: .walk),
+            .init(title: "Walk", subtitle: "AR Walk", icon: "figure.walk", needsScan: true, route: nil, action: .walk),
             .init(title: "Design", subtitle: "Furniture", icon: "sofa.fill", needsScan: false, route: .roomPlan, action: .route),
             .init(title: "Ruler", subtitle: "Distance", icon: "ruler", needsScan: false, route: .ruler, action: .route),
-            .init(title: "Level", subtitle: "Flat check", icon: "level", needsScan: false, route: .level, action: .route),
-            .init(title: "Area", subtitle: "Sq ft", icon: "square.dashed", needsScan: false, route: .area, action: .route),
+            .init(title: "Level", subtitle: "Flat Check", icon: "level", needsScan: false, route: .level, action: .route),
+            .init(title: "Area", subtitle: "Sq Ft", icon: "square.dashed", needsScan: false, route: .area, action: .route),
+            .init(title: "Plan", subtitle: "Room Plan", icon: "square.grid.3x3.topleft.filled", needsScan: false, route: .planner, action: .route),
         ]
     }
 
@@ -91,57 +91,31 @@ struct ToolsHomeView: View {
                                 .foregroundStyle(AppTheme.text)
                                 .padding(.top, 8)
 
-                            // Primary — big, thumb-friendly, sits lower
+                            // Primary stack: Full 3D Scan → 3D View → My Rooms
                             Button {
                                 showScanner = true
                             } label: {
-                                VStack(spacing: 14) {
-                                    HStack(spacing: 16) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(.white.opacity(0.22))
-                                                .frame(width: 72, height: 72)
-                                            Image(systemName: "camera.viewfinder")
-                                                .font(.system(size: 32, weight: .bold))
-                                                .foregroundStyle(.white)
-                                        }
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Text("Full 3D Scan")
-                                                .font(.system(size: 26, weight: .bold, design: .rounded))
-                                            Text("Point · Walk · Capture Your Space")
-                                                .font(.system(size: 15, weight: .semibold))
-                                                .opacity(0.95)
-                                        }
-                                        Spacer(minLength: 0)
-                                        Image(systemName: "arrow.right.circle.fill")
-                                            .font(.system(size: 36))
-                                    }
-                                    Text("Tap To Start · Just Point And Walk")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .opacity(0.88)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 22)
-                                .frame(maxWidth: .infinity, minHeight: 130)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [AppTheme.blue, AppTheme.blueDeep],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                        .shadow(color: AppTheme.blue.opacity(0.38), radius: 18, y: 8)
+                                primaryHeroCard(
+                                    title: "Full 3D Scan",
+                                    subtitle: "Point · Walk · Capture Your Space",
+                                    icon: "camera.viewfinder",
+                                    gradient: true
                                 )
-                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .padding(.top, 4)
 
-                            // My rooms
+                            Button {
+                                openLatestOrLibrary()
+                            } label: {
+                                primaryHeroCard(
+                                    title: "3D View Scan",
+                                    subtitle: "Open Your Latest Scan In 3D",
+                                    icon: "cube.fill",
+                                    gradient: true
+                                )
+                            }
+                            .buttonStyle(.plain)
+
                             Button {
                                 switchToLibrary()
                             } label: {
@@ -152,10 +126,10 @@ struct ToolsHomeView: View {
                                         .frame(width: 48, height: 48)
                                         .background(AppTheme.blueSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                     VStack(alignment: .leading, spacing: 3) {
-                                        Text("My rooms")
+                                        Text("My Rooms")
                                             .font(.headline.weight(.bold))
                                             .foregroundStyle(AppTheme.text)
-                                        Text(roomCount == 0 ? "No scans yet" : "\(roomCount) saved")
+                                        Text(roomCount == 0 ? "No Scans Yet" : "\(roomCount) Saved")
                                             .font(.subheadline)
                                             .foregroundStyle(AppTheme.textSecondary)
                                     }
@@ -165,7 +139,7 @@ struct ToolsHomeView: View {
                                         .foregroundStyle(AppTheme.textTertiary)
                                 }
                                 .padding(14)
-                                .frame(minHeight: 64)
+                                .frame(maxWidth: .infinity, minHeight: 64)
                                 .background(cardBg)
                                 .contentShape(Rectangle())
                             }
@@ -220,7 +194,53 @@ struct ToolsHomeView: View {
         }
     }
 
-    private func gridButton(_ item: HomeGridItem) -> some View {
+    private func primaryHeroCard(title: String, subtitle: String, icon: String, gradient: Bool) -> some View {
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(.white.opacity(0.22))
+                    .frame(width: 72, height: 72)
+                Image(systemName: icon)
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                Text(subtitle)
+                    .font(.system(size: 14, weight: .semibold))
+                    .opacity(0.95)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.right.circle.fill")
+                .font(.system(size: 34))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 20)
+        .frame(maxWidth: .infinity, minHeight: 120)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: gradient
+                            ? [AppTheme.blue, AppTheme.blueDeep]
+                            : [AppTheme.blue.opacity(0.85), AppTheme.blueDeep.opacity(0.9)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .shadow(color: AppTheme.blue.opacity(0.35), radius: 16, y: 7)
+        )
+        .contentShape(Rectangle())
+    }
+
+    private func openLatestOrLibrary() {
+        openLatestMesh()
+    }
+
+        private func gridButton(_ item: HomeGridItem) -> some View {
         let enabled = !item.needsScan || roomCount > 0
         return Button {
             switch item.action {

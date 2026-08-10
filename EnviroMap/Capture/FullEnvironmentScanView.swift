@@ -703,6 +703,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var keyframes: [PhotoTexturedMeshBuilder.Keyframe] = []
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
+    private var lastCamPos: SIMD3<Float>?
     private var lastStatsEmit: TimeInterval = 0
     private var maxKeyframes: Int { MeshDensityConfig.maxKeyframes }
     private var maxChunks: Int { MeshDensityConfig.maxChunks }
@@ -807,40 +808,50 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // Full-quality pull of EVERY live mesh anchor — fills holes from live subsample
+        // ONE full pull from ARKit — ignore thin live copies (source of holes + lag)
         guard let frame = arView?.session.currentFrame else { return }
         autoreleasepool {
             ingestKeyframe(from: frame)
             let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
 
-            // Merge full-quality over live tiles (same id overwrites thin copies)
-            var upgraded = 0
+            var fresh: [UUID: CapturedMeshChunk] = [:]
             for mesh in meshes {
                 if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
-                    stateLock.lock()
-                    chunks[chunk.id] = chunk
-                    stateLock.unlock()
-                    upgraded += 1
+                    fresh[chunk.id] = chunk
                 }
             }
-
-            // Second pass light if first produced nothing
-            stateLock.lock()
-            let empty = chunks.isEmpty
-            let total = chunks.count
-            stateLock.unlock()
-            if empty {
+            // Fallback light if full failed for some
+            if fresh.isEmpty {
                 for mesh in meshes {
                     if let chunk = Self.copyChunk(from: mesh, fullQuality: false) {
-                        stateLock.lock()
-                        chunks[chunk.id] = chunk
-                        stateLock.unlock()
+                        fresh[chunk.id] = chunk
                     }
                 }
             }
-            print("[EnviroMap] harvest upgraded=\(upgraded) totalChunks=\(total) anchors=\(meshes.count)")
+            // Prefer full harvest; merge any live-only ids that disappeared from frame
+            stateLock.lock()
+            if !fresh.isEmpty {
+                // Keep denser of fresh vs existing per id
+                for (id, chunk) in fresh {
+                    if let old = chunks[id], old.positions.count > chunk.positions.count {
+                        // keep denser
+                    } else {
+                        chunks[id] = chunk
+                    }
+                }
+                // If fresh has many more anchors, replace entirely with fresh (ARKit truth)
+                if fresh.count >= chunks.count {
+                    chunks = fresh
+                } else {
+                    for (id, chunk) in fresh { chunks[id] = chunk }
+                }
+            }
+            let total = chunks.count
+            stateLock.unlock()
+            print("[EnviroMap] final harvest anchors=\(meshes.count) chunks=\(total)")
         }
     }
+
 
     func buildExportFast() -> FullEnvironmentScanModel.ExportPayload? {
         stateLock.lock()
@@ -992,28 +1003,48 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard isRunning else { return }
-        let t = frame.timestamp
+        let ts = frame.timestamp
 
         stateLock.lock()
-        let n = chunks.count
+        let stored = chunks.count
+        let framesN = keyframes.count
         stateLock.unlock()
 
-        // Adaptive: slow down as mesh grows so 100+ surfaces stay smooth
-        let meshI = MeshDensityConfig.meshCopyInterval(chunkCount: n)
-        let kfI = MeshDensityConfig.keyframeInterval(chunkCount: n)
+        let liveMeshCount = frame.anchors.compactMap { $0 as? ARMeshAnchor }.count
 
-        // One heavy job per tick max — mesh OR color
-        let needMesh = t - lastMeshCopyTime >= meshI
-        let needKF = t - lastKeyframeTime >= kfI
-
-        if needMesh {
-            lastMeshCopyTime = t
+        // Warm-up only: copy mesh while under threshold, then STOP copying (no freeze)
+        let warmUp = stored < MeshDensityConfig.liveMeshCopyUntilChunks
+        if warmUp, ts - lastMeshCopyTime >= MeshDensityConfig.meshCopyInterval {
+            lastMeshCopyTime = ts
             autoreleasepool { ingestMeshes(from: frame) }
+            emitStats(meshCount: max(stored, liveMeshCount), frameCount: framesN)
             return
         }
-        if needKF {
-            lastKeyframeTime = t
+
+        // After warm-up: keyframes only + progress from live ARKit counts
+        let pos = SIMD3<Float>(
+            frame.camera.transform.columns.3.x,
+            frame.camera.transform.columns.3.y,
+            frame.camera.transform.columns.3.z
+        )
+        var moving = false
+        if let prev = lastCamPos {
+            moving = simd_length(pos - prev) > 0.015
+        }
+        lastCamPos = pos
+
+        let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
+        if ts - lastKeyframeTime >= kfI {
+            lastKeyframeTime = ts
             autoreleasepool { ingestKeyframe(from: frame) }
+        }
+
+        if ts - lastStatsEmit >= 0.45 {
+            stateLock.lock()
+            let fn = keyframes.count
+            let sn = chunks.count
+            stateLock.unlock()
+            emitStats(meshCount: max(sn, liveMeshCount), frameCount: fn)
         }
     }
 
