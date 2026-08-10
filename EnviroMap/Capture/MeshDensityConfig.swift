@@ -12,10 +12,10 @@ enum MeshDensityConfig {
         movingFast ? 0.10 : 0.18
     }
 
-    static var maxKeyframes: Int { 72 }
+    static var maxKeyframes: Int { 80 }
     static var maxChunks: Int { 4000 }
     /// Higher = sharper color
-    static var keyframeMaxWidth: Int { 768 }
+    static var keyframeMaxWidth: Int { 960 }
 
     // Live mesh copies DISABLED (0) — ARKit builds denser mesh when we stop fighting it
     static var liveMeshCopyUntilChunks: Int { 0 }
@@ -27,7 +27,7 @@ enum MeshDensityConfig {
 
     static var finalVertexSoftCap: Int { 1_200_000 }
     static var triangleBudget: Int { highDetail ? 700_000 : 400_000 }
-    static var bakeKeyframeLimit: Int { 72 }
+    static var bakeKeyframeLimit: Int { 48 }
     static var samplesPerTriangle: Int { 3 }
     static var quantizeShift: Int { 2 }
 
