@@ -34,7 +34,7 @@ enum PhotoTexturedMeshBuilder {
     static var progressHandler: ((Double, String) -> Void)?
 
     /// Hard ceiling so bake never hangs on phone
-    private static let bakeDeadlineSeconds: CFTimeInterval = 55
+    private static let bakeDeadlineSeconds: CFTimeInterval = 60
     /// Fallback color when paint times out — always visible on dark bg
     private static let visibleGray: (UInt8, UInt8, UInt8) = (168, 172, 178)
     /// Depth colors for hole fill (set only during buildScene)
@@ -231,7 +231,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.075, triUsed < triBudget {
+                if edge > 0.06, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -759,13 +759,13 @@ enum PhotoTexturedMeshBuilder {
         }
 
         let mid = (r + g + bl) / 3.0
-        let contrast: Float = 1.22
+        let contrast: Float = 1.28
         r = clamp01(mid + (r - mid) * contrast)
         g = clamp01(mid + (g - mid) * contrast)
         bl = clamp01(mid + (bl - mid) * contrast)
 
         let avg = (r + g + bl) / 3.0
-        let sat: Float = 1.22
+        let sat: Float = 1.28
         r = clamp01(avg + (r - avg) * sat)
         g = clamp01(avg + (g - avg) * sat)
         bl = clamp01(avg + (bl - avg) * sat)

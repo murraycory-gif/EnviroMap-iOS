@@ -1,19 +1,22 @@
 import Foundation
 
-/// Dense coverage + clear color indoors & outdoors (dark/bright adaptive).
+/// Scan light (smooth) · Finish heavy (max coverage + clear color).
 enum MeshDensityConfig {
     static var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
     }
 
-    /// Color frames: denser while moving for clearer paint
+    /// Color while walking — not every frame (lag)
     static func keyframeInterval(movingFast: Bool) -> TimeInterval {
-        movingFast ? 0.07 : 0.10
+        movingFast ? 0.12 : 0.18
     }
 
-    static var maxKeyframes: Int { 110 }
-    static var maxChunks: Int { 9000 }
-    /// Higher res keyframes = clearer surfaces
+    static var maxKeyframes: Int { 100 }
+    static var maxChunks: Int { 10_000 }
+
+    /// Live scan uses this (smaller = smoother)
+    static var liveKeyframeMaxWidth: Int { 720 }
+    /// Finish harvest / bake uses this (clearer)
     static var keyframeMaxWidth: Int { 1280 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }
@@ -23,22 +26,20 @@ enum MeshDensityConfig {
     static func liveVertexStep(vCount: Int) -> Int { 1 }
     static func liveFaceStep(faceCount: Int) -> Int { 1 }
 
-    static var finalVertexSoftCap: Int { 2_500_000 }
-    /// More triangles kept = denser coverage / fewer holes
-    static var triangleBudget: Int { highDetail ? 900_000 : 520_000 }
-    static var bakeKeyframeLimit: Int { 90 }
+    static var finalVertexSoftCap: Int { 3_000_000 }
+    static var triangleBudget: Int { highDetail ? 1_000_000 : 600_000 }
+    static var bakeKeyframeLimit: Int { 96 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 
-    /// Live mesh bank: how often / how many tiles (safe, sync copy)
-    static var meshBankInterval: TimeInterval { 0.35 }
-    static var meshBankTilesPerTick: Int { 64 }
+    /// Rare full bank sweep during walk (smooth)
+    static var meshBankInterval: TimeInterval { 1.4 }
+    static var meshBankTilesPerTick: Int { 20 }
 
-    /// Depth hole-fill sample density (lower step = denser)
-    static var depthSampleStep: Int { 4 }
-    static var depthIngestInterval: TimeInterval { 0.35 }
+    static var depthSampleStep: Int { 5 }
+    static var depthIngestInterval: TimeInterval { 0.55 }
 
     static func blueWireFaceStep(faceCount: Int) -> Int {
-        faceCount > 4_000 ? 10 : 5
+        faceCount > 4_000 ? 12 : 6
     }
 }

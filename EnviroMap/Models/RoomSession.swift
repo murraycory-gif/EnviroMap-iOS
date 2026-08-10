@@ -21,7 +21,7 @@ struct RoomSession: Identifiable, Codable, Hashable {
 
     var folderName: String { id.uuidString }
 
-    static func makeNew(name: String) -> RoomSession {
+    nonisolated static func makeNew(name: String) -> RoomSession {
         let id = UUID()
         let now = Date()
         return RoomSession(

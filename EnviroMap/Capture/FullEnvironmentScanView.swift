@@ -759,6 +759,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         scn.automaticallyUpdatesLighting = true
         scn.scene = SCNScene()
         scn.rendersCameraGrain = false
+        scn.preferredFramesPerSecond = 30
+        scn.contentScaleFactor = min(UIScreen.main.scale, 2.0) // less GPU mid-scan
         scn.delegate = self
         // Yellow feature points + we'll add blue mesh lines for coverage
         // Live ARKit mesh shows as blue coverage (styled in renderer)
@@ -824,8 +826,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             config.sceneReconstruction = .mesh
         }
         config.environmentTexturing = .automatic
-        config.planeDetection = [.horizontal, .vertical]
+        // Plane detection optional — mesh recon is what we need
+        config.planeDetection = []
         config.isLightEstimationEnabled = true
+        config.providesAudioData = false
         // Better outdoor/indoor auto exposure when device supports it
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             config.frameSemantics.insert(.sceneDepth)
@@ -884,17 +888,19 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             var all = chunks
             stateLock.unlock()
 
-            // 6 densify passes — hold still; ARKit fills gaps between pulls
-            for pass in 0..<6 {
+            // Finish HEAVY: many full pulls — this is where coverage is won
+            // Phone should be mostly still; ARKit densifies between pulls
+            for pass in 0..<8 {
                 if let frame = session.currentFrame {
-                    ingestKeyframe(from: frame)
+                    // High-res color only on Finish (clear paint)
+                    ingestKeyframe(from: frame, highRes: true)
                     merge(&all, pull(from: frame))
-                    if pass == 0 || pass == 2 || pass == 5 {
+                    if pass == 0 || pass == 3 || pass == 7 {
                         ingestDepthPoints(from: frame)
                     }
                 }
-                if pass < 5 {
-                    Thread.sleep(forTimeInterval: 0.30)
+                if pass < 7 {
+                    Thread.sleep(forTimeInterval: 0.22)
                 }
             }
 
@@ -958,26 +964,23 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
-        applyBlueWire(node: node, mesh: mesh)
-        noteClassification(from: mesh)
-        // Capture tile immediately while geometry buffers are valid
+        // New tiles only — cheap bank, keeps coverage without lag
         bankMeshNow(mesh, minInterval: 0.0)
+        if showBlueMesh {
+            applyBlueWire(node: node, mesh: mesh)
+        }
+        noteClassification(from: mesh)
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        guard let mesh = anchor as? ARMeshAnchor else { return }
+        // NO mesh bank on every update (that caused lag + starved ARKit).
+        // Finish harvest pulls the full densest mesh.
+        guard showBlueMesh, let mesh = anchor as? ARMeshAnchor else { return }
         let id = mesh.identifier
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[id], now - last < 0.75 {
-            // Still bank denser geometry periodically even if wire skipped
-            bankMeshNow(mesh, minInterval: 0.32)
-            noteClassification(from: mesh)
-            return
-        }
+        if let last = lastVizTime[id], now - last < 1.2 { return }
         lastVizTime[id] = now
         applyBlueWire(node: node, mesh: mesh)
-        noteClassification(from: mesh)
-        bankMeshNow(mesh, minInterval: 0.32)
     }
 
     /// Sync-copy one mesh tile into densest bank (ARMesh only valid here)
@@ -988,8 +991,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
         lastBankIdTime[id] = now
+        // liveBank thins huge tiles so ARKit stays smooth
         guard let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: true) else { return }
-        // Merge on capture queue so we don't block ARKit long
         captureQueue.async { [weak self] in
             self?.mergeDensestChunks([chunk])
         }
@@ -1013,8 +1016,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     /// Read AI prefs each session
     private var showBlueMesh: Bool {
-        // Default OFF — blue wire was a major freeze source. Settings can re-enable.
-        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? true
+        // Default OFF — blue wire steals CPU from LiDAR reconstruction (lag + holes)
+        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? false
     }
     private var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
@@ -1248,13 +1251,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
     }
 
-    private func ingestKeyframe(from frame: ARFrame) {
+    private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
         // Skip if already at cap — avoid peak memory during long scans
         stateLock.lock()
         let atCap = keyframes.count >= maxKeyframes
         stateLock.unlock()
         if atCap {
-            // Replace oldest instead of growing
             stateLock.lock()
             if !keyframes.isEmpty { keyframes.removeFirst() }
             stateLock.unlock()
@@ -1262,8 +1264,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
-        // Always live-size (never 960 mid-scan)
-        let width = MeshDensityConfig.keyframeMaxWidth
+        // Live: smaller for smooth scan. Finish: full res for clear color.
+        let width = highRes
+            ? MeshDensityConfig.keyframeMaxWidth
+            : MeshDensityConfig.liveKeyframeMaxWidth
         guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
             from: frame,
             orientation: orientation,
@@ -1277,7 +1281,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             keyframes.removeFirst(keyframes.count - maxKeyframes)
         }
         stateLock.unlock()
-        // Progress comes from session(didUpdate) live ARKit mesh count — not empty chunks
     }
 
     private func emitStats(meshCount: Int, frameCount: Int) {
@@ -1474,9 +1477,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // liveBank: keep most detail but soft-cap huge tiles so mid-scan never freezes
         let step: Int
         if liveBank {
-            step = 1  // keep full tile density in bank
+            // Thin only huge tiles during walk so ARKit stays smooth
+            step = vCount > 25_000 ? 2 : 1
         } else if fullQuality {
-            step = 1
+            step = 1  // Finish = every vertex
         } else {
             step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }
