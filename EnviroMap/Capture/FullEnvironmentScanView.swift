@@ -585,7 +585,7 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Move slowly. Yellow dots = tracking. Mesh count rises as space is saved."
+        instruction = "Walk around every object · blue mesh must cover cars & furniture fully"
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
                 self?.meshChunks = chunks
@@ -675,8 +675,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastStatsEmit: TimeInterval = 0
-    private let maxKeyframes = 48
-    private let maxChunks = 800
+    private let maxKeyframes = 80
+    private let maxChunks = 2000
     private var coverageRoot: SCNNode?
     private var lastMarkerUpdate: TimeInterval = 0
 
@@ -755,20 +755,20 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // Multiple pulls while session still has dense mesh anchors
+        // Full-density harvest for export (cars / furniture need every triangle)
         if let frame = arView?.session.currentFrame {
-            ingestMeshes(from: frame)
             ingestKeyframe(from: frame)
-        }
-        // Also scrape any ARMeshAnchors still tracked by the session
-        if let anchors = arView?.session.currentFrame?.anchors {
-            for a in anchors {
+            var full: [UUID: CapturedMeshChunk] = [:]
+            for a in frame.anchors {
                 guard let mesh = a as? ARMeshAnchor else { continue }
-                if let chunk = Self.copyChunk(from: mesh) {
-                    stateLock.lock()
-                    chunks[chunk.id] = chunk
-                    stateLock.unlock()
+                if let chunk = Self.copyChunk(from: mesh, fullQuality: true) {
+                    full[chunk.id] = chunk
                 }
+            }
+            if !full.isEmpty {
+                stateLock.lock()
+                chunks = full
+                stateLock.unlock()
             }
         }
     }
@@ -946,13 +946,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let t = frame.timestamp
 
         // Copy mesh from frame anchors (throttled) — safe snapshot
-        if t - lastMeshCopyTime >= 0.35 {
+        if t - lastMeshCopyTime >= 0.14 {
             lastMeshCopyTime = t
             ingestMeshes(from: frame)
         }
 
         // Color keyframes (throttled)
-        if t - lastKeyframeTime >= 0.22 {
+        if t - lastKeyframeTime >= 0.12 {
             lastKeyframeTime = t
             ingestKeyframe(from: frame)
         }
@@ -1006,7 +1006,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         if meshCount < 5 {
             latestAITip = "AI: Point at large surfaces first — floor and walls"
         } else if meshCount < 20 {
-            latestAITip = "AI: Circle furniture slowly · fill blue over every side"
+            latestAITip = "AI: Walk around objects (cars, sofas) · blue must cover all sides"
         } else if meshCount < 45 {
             latestAITip = "AI: Check gaps — dark corners and under objects"
         } else if classCounts["floor", default: 0] < 3 {
@@ -1066,7 +1066,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             from: frame,
             orientation: orientation,
             viewport: viewport,
-            maxWidth: (UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true) ? 480 : 320
+            maxWidth: (UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true) ? 720 : 480
         ) else { return }
 
         stateLock.lock()
@@ -1110,25 +1110,31 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         _ = g
     }
 
-    private static func copyChunk(from anchor: ARMeshAnchor) -> CapturedMeshChunk? {
+        private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false) -> CapturedMeshChunk? {
         let geom = anchor.geometry
         let vSource = geom.vertices
         let nSource = geom.normals
         let faces = geom.faces
         let vCount = vSource.count
         guard vCount > 0, faces.count > 0 else { return nil }
-        // Soft cap — skip only extreme anchors
-        guard vCount < 100_000 else { return nil }
+        // Allow larger anchors so cars/furniture stay complete
+        guard vCount < 250_000 else { return nil }
 
-        // Subsample large meshes for smoother scanning; keep denser when High Detail on
-        let hi = UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
-        let step = hi ? (vCount > 45_000 ? 2 : 1) : (vCount > 20_000 ? 2 : 1)
+        // Live scan: light subsample. Final harvest: keep every vertex/face.
+        let step: Int
+        if fullQuality {
+            step = 1
+        } else {
+            let hi = UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
+            step = hi ? (vCount > 60_000 ? 2 : 1) : (vCount > 25_000 ? 2 : 1)
+        }
+
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
-        positions.reserveCapacity(vCount / step + 1)
-        normals.reserveCapacity(vCount / step + 1)
+        positions.reserveCapacity(vCount / max(step, 1) + 1)
+        normals.reserveCapacity(vCount / max(step, 1) + 1)
         var remap = [Int: Int]()
-        remap.reserveCapacity(vCount / step + 1)
+        remap.reserveCapacity(vCount / max(step, 1) + 1)
 
         for i in stride(from: 0, to: vCount, by: step) {
             let vp = vSource.buffer.contents().advanced(by: vSource.offset + vSource.stride * i)
@@ -1143,8 +1149,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         var indices = [UInt32]()
-        let faceStep = faces.count > 40_000 ? 2 : 1
-        indices.reserveCapacity(faces.count / faceStep * faces.indexCountPerPrimitive)
+        let faceStep = fullQuality ? 1 : (faces.count > 50_000 ? 2 : 1)
+        indices.reserveCapacity(max(1, faces.count / faceStep) * faces.indexCountPerPrimitive)
         for f in stride(from: 0, to: faces.count, by: faceStep) {
             var tri = [UInt32]()
             tri.reserveCapacity(3)
@@ -1176,6 +1182,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             indices: indices
         )
     }
+
 
     private static func copyPixelBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
         let width = CVPixelBufferGetWidth(source)

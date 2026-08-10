@@ -232,7 +232,7 @@ struct MeshSceneView: UIViewRepresentable {
                     scene.rootNode.enumerateChildNodes { node, _ in
                         guard let geos = node.geometry else { return }
                         for mat in geos.materials {
-                            mat.lightingModel = .lambert
+                            mat.lightingModel = .constant
                             mat.isDoubleSided = true
                             mat.shaderModifiers = [:]
                         }
