@@ -45,6 +45,15 @@ enum PhotoTexturedMeshBuilder {
     
     /// Centers mesh at origin and installs a reliable orbit camera (fixes black Review).
     static func normalizeForPreview(_ scene: SCNScene) {
+        if scene.rootNode.userData?["enviromap.normalized"] as? Bool == true {
+            // Still ensure camera exists
+            if scene.rootNode.childNode(withName: "previewCam", recursively: true) == nil {
+                // fall through to camera setup only — reset flag temporarily
+                scene.rootNode.userData?["enviromap.normalized"] = false
+            } else {
+                return
+            }
+        }
         let mesh = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
 
         // Compute world bounds from geometry
@@ -131,6 +140,8 @@ enum PhotoTexturedMeshBuilder {
             for c in node.childNodes { paint(c) }
         }
         paint(scene.rootNode)
+        if scene.rootNode.userData == nil { scene.rootNode.userData = NSMutableDictionary() }
+        scene.rootNode.userData?["enviromap.normalized"] = true
     }
 
 

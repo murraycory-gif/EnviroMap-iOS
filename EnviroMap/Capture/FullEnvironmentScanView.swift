@@ -60,7 +60,7 @@ struct FullEnvironmentScanView: View {
     }
 
     private var scanTopBar: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 12) {
             Button {
                 model.stop()
                 dismiss()
@@ -71,156 +71,118 @@ struct FullEnvironmentScanView: View {
                     .frame(width: 40, height: 40)
                     .background(.ultraThinMaterial, in: Circle())
             }
-            Spacer()
-            VStack(spacing: 2) {
+
+            // Live status — compact top center
+            if model.phase == .scanning {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(model.meshChunks > 0 ? Color.green : Color.orange)
+                        .frame(width: 8, height: 8)
+                    Text(model.meshChunks > 0 ? "\(model.meshChunks) surfaces" : "Aim to start")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.white)
+                    if model.hasColorFrames {
+                        Text("· Color")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+            } else {
                 Text(model.statusTitle)
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
-                Text(model.detailLine)
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.8))
-                Text("Full Env · Real Colors")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
             }
-            Spacer()
-            Color.clear.frame(width: 40, height: 40)
+
+            Spacer(minLength: 0)
+
+            // Quiet AI tip as single line (no big box)
+            if model.phase == .scanning, !model.aiCoachTip.isEmpty {
+                Text(model.aiCoachTip.replacingOccurrences(of: "AI: ", with: ""))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(1)
+                    .frame(maxWidth: 120, alignment: .trailing)
+            }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 8)
+        .padding(.top, 10)
     }
 
     private var scanBottomBar: some View {
-        VStack(spacing: 12) {
-            Text(model.instruction)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-
-            // Live capture status + AI coach
-            if model.phase == .scanning {
-                VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 10, height: 10)
-                        Text(model.meshChunks > 0
-                             ? "Mapping… \(model.meshChunks) surfaces"
-                             : "Point at a surface to start")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(.white)
-                        Spacer()
-                        Text("BLUE = mapped")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(Color(red: 0.4, green: 0.85, blue: 1))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.45), in: Capsule())
-
-                    HStack(spacing: 8) {
-                        Image(systemName: "sparkles")
-                            .foregroundStyle(Color(red: 0.5, green: 0.8, blue: 1))
-                        Text(model.aiCoachTip)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.95))
-                            .lineLimit(2)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color(red: 0.1, green: 0.25, blue: 0.45).opacity(0.85), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-            }
-
-            HStack(spacing: 10) {
-                metric("Mesh", "\(model.meshChunks)")
-                metric("Coverage", model.coverageLabel)
-                metric("Color", model.hasColorFrames ? "On" : "…")
-            }
-
-            Group {
-                switch model.phase {
-                case .scanning:
-                    Button {
-                        model.finishScanning()
-                    } label: {
-                        Label("Done — Review Scan", systemImage: "checkmark.circle.fill")
-                            .font(.headline.weight(.bold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.blue)
-                    .disabled(model.meshChunks < 2)
-
-                case .processing:
-                    HStack(spacing: 12) {
-                        ProgressView().tint(.white)
-                        Text("Baking Real Colors Onto Mesh…")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                    }
+        VStack(spacing: 10) {
+            if case .failed(let msg) = model.phase {
+                Text(msg)
+                    .font(.footnote)
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                    .background(Color.red.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
+                Button("Try Again") { model.start() }
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 18)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(.vertical, 16)
+                    .background(AppTheme.blue, in: RoundedRectangle(cornerRadius: 16))
+            } else if model.phase == .scanning {
+                // Stats row — compact chips only
+                HStack(spacing: 8) {
+                    miniChip("\(model.meshChunks)", "Mesh")
+                    miniChip(model.coverageLabel, "Cover")
+                    miniChip(model.hasColorFrames ? "On" : "…", "Color")
+                }
 
-                case .failed(let msg):
-                    VStack(spacing: 12) {
-                        Text(msg)
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                            .multilineTextAlignment(.center)
-                        Button("Try Again") { model.start() }
-                            .buttonStyle(.borderedProminent)
-                            .tint(AppTheme.blue)
-                    }
-
-                default:
-                    EmptyView()
+                Button {
+                    model.finishScanning()
+                } label: {
+                    Label("Done — Review Scan", systemImage: "checkmark.circle.fill")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(
+                            LinearGradient(
+                                colors: [AppTheme.blue, AppTheme.blueDeep],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
+                }
+                .disabled(model.meshChunks < 1)
+                .opacity(model.meshChunks < 1 ? 0.5 : 1)
+            } else if model.phase == .idle {
+                Button {
+                    model.start()
+                } label: {
+                    Text("Start Scanning")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(AppTheme.blue, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 28)
+        .padding(.bottom, 20)
     }
 
-    private func viewControl(icon: String, title: String, action: (() -> Void)? = nil) -> some View {
-        Button {
-            action?()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                Text(title)
-            }
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(action == nil)
-    }
-
-    private func metric(_ title: String, _ value: String) -> some View {
+    private func miniChip(_ value: String, _ label: String) -> some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.headline.monospacedDigit())
+                .font(.subheadline.weight(.bold))
                 .foregroundStyle(.white)
-            Text(title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.7))
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.55))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
-
 
     // MARK: - Edgy processing / loading screen
 
@@ -330,16 +292,17 @@ struct FullEnvironmentScanView: View {
             // Full-screen 3D is the product — not a tiny card
             Color.black.ignoresSafeArea()
 
-            if let scene = model.previewScene {
-                PreviewMeshView(scene: scene, resetToken: model.viewResetToken)
-                    .ignoresSafeArea()
-            } else if let url = model.previewMeshURL {
-                PreviewMeshView(url: url, resetToken: model.viewResetToken)
-                    .ignoresSafeArea()
-            } else {
-                ProgressView()
-                    .tint(.white)
+            Group {
+                if let scene = model.previewScene {
+                    PreviewMeshView(scene: scene, resetToken: model.viewResetToken)
+                } else if let url = model.previewMeshURL {
+                    PreviewMeshView(url: url, resetToken: model.viewResetToken)
+                } else {
+                    ProgressView().tint(.white)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
 
             // Top chrome
             VStack(spacing: 0) {
@@ -551,111 +514,153 @@ struct PreviewMeshView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> SCNView {
-        let v = SCNView(frame: .zero)
-        v.backgroundColor = UIColor(red: 0.07, green: 0.08, blue: 0.11, alpha: 1)
+        let v = SCNView(frame: UIScreen.main.bounds)
+        v.backgroundColor = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
         v.allowsCameraControl = true
         v.autoenablesDefaultLighting = true
-        v.antialiasingMode = .multisampling4X
-        v.preferredFramesPerSecond = 60
+        v.antialiasingMode = .multisampling2X
+        v.preferredFramesPerSecond = 30
         v.isPlaying = true
         v.rendersContinuously = true
         v.defaultCameraController.interactionMode = .orbitTurntable
         v.defaultCameraController.inertiaEnabled = true
-        v.defaultCameraController.maximumVerticalAngle = 89
-        v.defaultCameraController.minimumVerticalAngle = -89
-        context.coordinator.scnView = v
-
-        if let scene {
-            Self.prepare(scene)
-            v.scene = scene
-            // Fit after layout so bounds are valid
-            DispatchQueue.main.async {
-                context.coordinator.fitCamera(in: v, scene: scene)
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                context.coordinator.fitCamera(in: v, scene: scene)
-            }
-        } else if let url {
-            DispatchQueue.global(qos: .userInitiated).async {
-                if let scene = try? SCNScene(url: url, options: nil) {
-                    Self.prepare(scene)
-                    DispatchQueue.main.async {
-                        v.scene = scene
-                        context.coordinator.fitCamera(in: v, scene: scene)
-                    }
-                }
-            }
-        }
+        context.coordinator.view = v
+        context.coordinator.load(scene: scene, url: url)
         return v
     }
 
     func updateUIView(_ uiView: SCNView, context: Context) {
-        // Assign scene if it arrived after view created
-        if let scene, uiView.scene !== scene {
-            Self.prepare(scene)
-            uiView.scene = scene
-            context.coordinator.fitCamera(in: uiView, scene: scene)
+        if context.coordinator.lastToken != resetToken {
+            context.coordinator.lastToken = resetToken
+            context.coordinator.load(scene: scene, url: url)
+        } else if let scene, uiView.scene !== scene {
+            context.coordinator.load(scene: scene, url: nil)
         }
-        if context.coordinator.lastReset != resetToken {
-            context.coordinator.lastReset = resetToken
-            if let scene = uiView.scene {
-                context.coordinator.fitCamera(in: uiView, scene: scene)
-            }
-        }
-    }
-
-    static func prepare(_ scene: SCNScene) {
-        scene.background.contents = UIColor(red: 0.07, green: 0.08, blue: 0.11, alpha: 1)
-        scene.rootNode.enumerateChildNodes { node, _ in
-            guard let geos = node.geometry else { return }
-            for mat in geos.materials {
-                mat.lightingModel = .constant
-                mat.isDoubleSided = true
-                mat.writesToDepthBuffer = true
-                mat.readsFromDepthBuffer = true
-                mat.fillMode = .fill
-                mat.shaderModifiers = [:]
-                // Ensure diffuse is never nil
-                if mat.diffuse.contents == nil {
-                    mat.diffuse.contents = UIColor(white: 0.7, alpha: 1)
-                }
-            }
-            // Force solid fill
-            if geos.firstMaterial != nil {
-                geos.firstMaterial?.fillMode = .fill
-            }
-        }
-        // Ambient so constant materials stay bright
-        if scene.rootNode.childNode(withName: "viewerAmbient", recursively: false) == nil {
-            let amb = SCNNode()
-            amb.name = "viewerAmbient"
-            amb.light = SCNLight()
-            amb.light?.type = .ambient
-            amb.light?.intensity = 1200
-            amb.light?.color = UIColor.white
-            scene.rootNode.addChildNode(amb)
+        // Refit when we finally have a real size
+        if uiView.bounds.width > 10 {
+            context.coordinator.refitIfNeeded()
         }
     }
 
     final class Coordinator {
-        var scnView: SCNView?
-        var lastReset: Int = -1
+        weak var view: SCNView?
+        var lastToken: Int = -1
+        private var didFit = false
 
-        func fitCamera(in view: SCNView, scene: SCNScene) {
-            PhotoTexturedMeshBuilder.normalizeForPreview(scene)
-
-            if let cam = scene.rootNode.childNode(withName: "previewCam", recursively: true) {
-                view.pointOfView = cam
-                view.defaultCameraController.pointOfView = cam
-                view.defaultCameraController.target = SCNVector3Zero
+        func load(scene: SCNScene?, url: URL?) {
+            didFit = false
+            if let scene {
+                apply(scene)
+                return
             }
-            view.allowsCameraControl = true
-            view.autoenablesDefaultLighting = true
-            view.isPlaying = true
-            view.rendersContinuously = true
-            // Force redraw after layout
-            view.setNeedsDisplay()
-            view.layoutIfNeeded()
+            guard let url else { return }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let loaded = try? SCNScene(url: url, options: nil)
+                DispatchQueue.main.async {
+                    if let loaded { self?.apply(loaded) }
+                }
+            }
+        }
+
+        private func apply(_ scene: SCNScene) {
+            // Force visible materials
+            scene.background.contents = UIColor(red: 0.08, green: 0.09, blue: 0.12, alpha: 1)
+            scene.rootNode.enumerateChildNodes { node, _ in
+                guard let mats = node.geometry?.materials else { return }
+                for m in mats {
+                    m.lightingModel = .constant
+                    m.isDoubleSided = true
+                    m.fillMode = .fill
+                    m.writesToDepthBuffer = true
+                    if m.diffuse.contents == nil {
+                        m.diffuse.contents = UIColor(red: 0.55, green: 0.6, blue: 0.7, alpha: 1)
+                    }
+                }
+            }
+            // Ensure ambient
+            if scene.rootNode.childNode(withName: "viewerAmbient", recursively: false) == nil {
+                let a = SCNNode()
+                a.name = "viewerAmbient"
+                a.light = SCNLight()
+                a.light?.type = .ambient
+                a.light?.intensity = 1600
+                scene.rootNode.addChildNode(a)
+            }
+
+            PhotoTexturedMeshBuilder.normalizeForPreview(scene)
+            view?.scene = scene
+            DispatchQueue.main.async { [weak self] in
+                self?.refitIfNeeded()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.refitIfNeeded(force: true)
+            }
+        }
+
+        func refitIfNeeded(force: Bool = false) {
+            guard let view, let scene = view.scene else { return }
+            if didFit && !force { return }
+            guard view.bounds.width > 10 else { return }
+
+            let mesh = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
+            var minV = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var maxV = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+            var found = false
+
+            func visit(_ n: SCNNode) {
+                if let g = n.geometry {
+                    let (bmin, bmax) = g.boundingBox
+                    let corners = [
+                        SCNVector3(bmin.x, bmin.y, bmin.z),
+                        SCNVector3(bmax.x, bmax.y, bmax.z),
+                        SCNVector3(bmin.x, bmax.y, bmin.z),
+                        SCNVector3(bmax.x, bmin.y, bmax.z),
+                    ]
+                    for c in corners {
+                        let w = n.convertPosition(c, to: scene.rootNode)
+                        minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
+                        maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
+                        found = true
+                    }
+                }
+                for c in n.childNodes { visit(c) }
+            }
+            visit(mesh)
+
+            let center: SCNVector3
+            var radius: Float = 1.2
+            if found {
+                center = SCNVector3(
+                    (minV.x + maxV.x) * 0.5,
+                    (minV.y + maxV.y) * 0.5,
+                    (minV.z + maxV.z) * 0.5
+                )
+                radius = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z)) * 0.5
+                radius = max(radius, 0.35)
+            } else {
+                center = SCNVector3Zero
+            }
+
+            // Remove old cameras
+            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
+
+            let dist = radius * 2.8
+            let cam = SCNNode()
+            cam.name = "previewCam"
+            cam.camera = SCNCamera()
+            cam.camera?.fieldOfView = 55
+            cam.camera?.zNear = 0.01
+            cam.camera?.zFar = Double(max(100, radius * 50))
+            cam.position = SCNVector3(center.x + dist * 0.6, center.y + dist * 0.45, center.z + dist)
+            let constraint = SCNLookAtConstraint(target: mesh)
+            constraint.isGimbalLockEnabled = true
+            cam.constraints = [constraint]
+            scene.rootNode.addChildNode(cam)
+
+            view.pointOfView = cam
+            view.defaultCameraController.target = center
+            view.defaultCameraController.pointOfView = cam
+            didFit = true
         }
     }
 }
@@ -756,7 +761,9 @@ final class FullEnvironmentScanModel: ObservableObject {
             PhotoTexturedMeshBuilder.progressHandler = nil
 
             DispatchQueue.main.async {
-                if let result, let scene = result.scene, !scene.rootNode.childNodes.isEmpty {
+                if let result, let scene = result.scene,
+                   scene.rootNode.childNode(withName: "coloredMesh", recursively: true) != nil
+                    || !scene.rootNode.childNodes.isEmpty {
                     self.exportPayload = result
                     self.previewMeshURL = result.directory.appendingPathComponent(result.fileName)
                     self.previewScene = scene
@@ -1126,22 +1133,22 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     private func updateAICoach(meshCount: Int) {
         guard aiCoachEnabled else {
-            latestAITip = "Walk slowly · blue lines show mapped surfaces"
+            latestAITip = "Blue lines = mapped"
             return
         }
         // AI tips based on coverage progress + classification mix
         if meshCount < 5 {
-            latestAITip = "AI: Point at large surfaces first — floor and walls"
+            latestAITip = "Scan floors & walls first"
         } else if meshCount < 20 {
-            latestAITip = "AI: Walk around objects (cars, sofas) · blue must cover all sides"
+            latestAITip = "Circle objects slowly"
         } else if meshCount < 45 {
-            latestAITip = "AI: Check gaps — dark corners and under objects"
+            latestAITip = "Fill gaps & corners"
         } else if classCounts["floor", default: 0] < 3 {
-            latestAITip = "AI: Sweep the floor under tables and chairs"
+            latestAITip = "Scan under objects"
         } else if classCounts["wall", default: 0] < 3 {
-            latestAITip = "AI: Scan walls top-to-bottom for full room shape"
+            latestAITip = "Scan full wall height"
         } else {
-            latestAITip = "AI: Coverage looking strong · keep filling holes"
+            latestAITip = "Looking good — keep going"
         }
     }
 
