@@ -157,7 +157,7 @@ struct FullEnvironmentScanView: View {
                 Button {
                     model.finishScanning()
                 } label: {
-                    Label("Done — Review Scan", systemImage: "checkmark.circle.fill")
+                    Label("Done — Save Scan", systemImage: "checkmark.circle.fill")
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
@@ -725,6 +725,22 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         coverageRoot = root
     }
 
+    override func didReceiveMemoryWarning() {
+        super.didReceiveMemoryWarning()
+        stateLock.lock()
+        // Emergency trim — keep newest half of keyframes + chunks
+        if keyframes.count > 12 {
+            keyframes = Array(keyframes.suffix(12))
+        }
+        if chunks.count > 400 {
+            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
+            var keep: [UUID: CapturedMeshChunk] = [:]
+            for c in ranked.prefix(400) { keep[c.id] = c }
+            chunks = keep
+        }
+        stateLock.unlock()
+    }
+
     func start() {
         guard ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
                 || ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) else {
@@ -835,16 +851,27 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
-        // Visual only — mesh storage happens on captureQueue
-        applyBlueWire(node: node, mesh: mesh)
+        stateLock.lock()
+        let chunkCount = chunks.count
+        stateLock.unlock()
+        if chunkCount <= 45 {
+            applyBlueWire(node: node, mesh: mesh)
+        }
         noteClassification(from: mesh)
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         let now = CACurrentMediaTime()
-        // Blue wire is expensive — update rarely
-        if let last = lastVizTime[mesh.identifier], now - last < 0.75 { return }
+        // After enough mesh, stop rebuilding blue wire (was crashing ~40–80 frames)
+        stateLock.lock()
+        let chunkCount = chunks.count
+        stateLock.unlock()
+        if chunkCount > 45 {
+            // Keep existing wire; no rebuild
+            return
+        }
+        if let last = lastVizTime[mesh.identifier], now - last < 1.1 { return }
         lastVizTime[mesh.identifier] = now
         applyBlueWire(node: node, mesh: mesh)
         noteClassification(from: mesh)
@@ -995,7 +1022,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         updateAICoach(meshCount: meshCount)
         emitStats(meshCount: meshCount, frameCount: frameCount)
         // Coverage markers only occasionally (main-ish SCN work)
-        if meshCount % 4 == 0 {
+        // Coverage dots disabled under load — they added lag/crashes
+        if meshCount < 25, meshCount % 8 == 0 {
             DispatchQueue.main.async { [weak self] in
                 self?.updateCoverageMarkersIfNeeded()
             }
@@ -1065,13 +1093,26 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func ingestKeyframe(from frame: ARFrame) {
+        // Skip if already at cap — avoid peak memory during long scans
+        stateLock.lock()
+        let atCap = keyframes.count >= maxKeyframes
+        stateLock.unlock()
+        if atCap {
+            // Replace oldest instead of growing
+            stateLock.lock()
+            if !keyframes.isEmpty { keyframes.removeFirst() }
+            stateLock.unlock()
+        }
+
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
+        // Always live-size (never 960 mid-scan)
+        let width = min(MeshDensityConfig.keyframeMaxWidth, 400)
         guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
             from: frame,
             orientation: orientation,
             viewport: viewport,
-            maxWidth: MeshDensityConfig.keyframeMaxWidth
+            maxWidth: width
         ) else { return }
 
         stateLock.lock()
