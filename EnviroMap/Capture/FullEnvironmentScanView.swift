@@ -818,11 +818,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func snapshot() -> UIImage? { arView?.snapshot() }
 
     func forceFinalHarvest() {
-        // THE only geometry pull — full quality from ARKit after the walk
+        // Dense multi-pass harvest — keep densest version of every tile
         guard let session = arView?.session else { return }
-
-        // Brief settle so ARKit can densify last surfaces
-        Thread.sleep(forTimeInterval: 0.15)
 
         func pull(from frame: ARFrame) -> [UUID: CapturedMeshChunk] {
             var fresh: [UUID: CapturedMeshChunk] = [:]
@@ -832,41 +829,48 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                     fresh[chunk.id] = chunk
                 }
             }
-            if fresh.isEmpty {
-                for mesh in meshes {
-                    if let chunk = Self.copyChunk(from: mesh, fullQuality: false) {
-                        fresh[chunk.id] = chunk
-                    }
-                }
-            }
             return fresh
         }
 
+        func merge(_ into: inout [UUID: CapturedMeshChunk], _ extra: [UUID: CapturedMeshChunk]) {
+            for (id, chunk) in extra {
+                if let old = into[id], old.positions.count >= chunk.positions.count,
+                   old.indices.count >= chunk.indices.count {
+                    continue
+                }
+                into[id] = chunk
+            }
+        }
+
         autoreleasepool {
+            // Pass 1 — immediate
+            var all: [UUID: CapturedMeshChunk] = [:]
             if let frame = session.currentFrame {
                 ingestKeyframe(from: frame)
-                var all = pull(from: frame)
-
-                // Second pass — ARKit often densifies mid-harvest
-                Thread.sleep(forTimeInterval: 0.12)
-                if let frame2 = session.currentFrame {
-                    ingestKeyframe(from: frame2)
-                    let second = pull(from: frame2)
-                    for (id, chunk) in second {
-                        if let old = all[id], old.positions.count >= chunk.positions.count {
-                            continue
-                        }
-                        all[id] = chunk
-                    }
-                }
-
-                stateLock.lock()
-                chunks = all
-                let total = chunks.count
-                let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
-                stateLock.unlock()
-                print("[EnviroMap] HARVEST chunks=\(total) verts=\(verts)")
+                all = pull(from: frame)
             }
+
+            // Pass 2 — ARKit densifies when still
+            Thread.sleep(forTimeInterval: 0.22)
+            if let frame = session.currentFrame {
+                ingestKeyframe(from: frame)
+                merge(&all, pull(from: frame))
+            }
+
+            // Pass 3 — catch late tiles (cars, far walls)
+            Thread.sleep(forTimeInterval: 0.18)
+            if let frame = session.currentFrame {
+                ingestKeyframe(from: frame)
+                merge(&all, pull(from: frame))
+            }
+
+            stateLock.lock()
+            chunks = all
+            let total = chunks.count
+            let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
+            let faces = chunks.values.reduce(0) { $0 + $1.indices.count / 3 }
+            stateLock.unlock()
+            print("[EnviroMap] DENSE HARVEST chunks=\(total) verts=\(verts) faces=\(faces)")
         }
     }
 
@@ -1222,7 +1226,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         // Only subsample when huge. Done harvest uses step 1 unless insane.
         let step: Int
         if fullQuality {
-            step = 1  // never thin on Finish — holes are worse than big files
+            step = 1  // keep every vertex — fewer holes
         } else {
             step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }
@@ -1247,7 +1251,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         var indices = [UInt32]()
-        let faceStep = fullQuality ? 1 : MeshDensityConfig.liveFaceStep(faceCount: faces.count)
+        let faceStep = 1  // never drop faces on harvest
         indices.reserveCapacity(max(1, faces.count / faceStep) * faces.indexCountPerPrimitive)
         for f in stride(from: 0, to: faces.count, by: faceStep) {
             var tri = [UInt32]()

@@ -32,7 +32,7 @@ enum PhotoTexturedMeshBuilder {
     static var progressHandler: ((Double, String) -> Void)?
 
     /// Hard ceiling so bake never hangs on phone
-    private static let bakeDeadlineSeconds: CFTimeInterval = 18
+    private static let bakeDeadlineSeconds: CFTimeInterval = 28
 
     static func makeScene(chunks: [CapturedMeshChunk], keyframes: [Keyframe]) -> SCNScene? {
         buildScene(chunks: chunks, keyframes: keyframes)
@@ -78,7 +78,7 @@ enum PhotoTexturedMeshBuilder {
         progressHandler?(0.06, "Preparing…")
 
         // Fewer keyframes = much faster color + less RAM
-        let kfs = selectKeyframes(keyframes, limit: min(MeshDensityConfig.bakeKeyframeLimit, 28))
+        let kfs = selectKeyframes(keyframes, limit: MeshDensityConfig.bakeKeyframeLimit)
         let photos: [UIImage?] = kfs.map { imageFromRGB($0.rgb, width: $0.rgbWidth, height: $0.rgbHeight) }
 
         let scene = SCNScene()
@@ -104,7 +104,7 @@ enum PhotoTexturedMeshBuilder {
         fillSamples.reserveCapacity(800)
 
         let total = max(chunks.count, 1)
-        let triBudget = min(MeshDensityConfig.triangleBudget, 280_000)
+        let triBudget = MeshDensityConfig.triangleBudget
         var triUsed = 0
         var texTris = 0
         var vcTris = 0
@@ -157,11 +157,10 @@ enum PhotoTexturedMeshBuilder {
                 return c
             }
 
-            // Adaptive triangle step for speed
+            // Prefer every triangle — only thin extreme tiles (holes > speed)
             var triStep = 1
-            if triCount > 40_000 { triStep = 2 }
-            if triCount > 100_000 { triStep = 3 }
-            if triUsed > triBudget { triStep = max(triStep, 3) }
+            if triCount > 120_000 { triStep = 2 }
+            if triUsed > triBudget { triStep = 2 }
 
             var remap = [Int: UInt32]()
 
@@ -226,9 +225,38 @@ enum PhotoTexturedMeshBuilder {
                     remap[i] = id
                     return id
                 }
-                allIdx.append(contentsOf: [emit(i0), emit(i1), emit(i2)])
-                vcTris += 1
-                triUsed += 1
+                // Subdivide large faces once for sharper color (fewer blurry panels)
+                let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
+                if edge > 0.22, triUsed < triBudget {
+                    let m01 = (w0 + w1) * 0.5
+                    let m12 = (w1 + w2) * 0.5
+                    let m20 = (w2 + w0) * 0.5
+                    let nm01 = simd_normalize(n0 + n1)
+                    let nm12 = simd_normalize(n1 + n2)
+                    let nm20 = simd_normalize(n2 + n0)
+                    func emitMid(_ w: SIMD3<Float>, _ n: SIMD3<Float>) -> UInt32 {
+                        let c = fastColor(world: w, normal: n, keyframes: kfs)
+                        allPos.append(contentsOf: [w.x, w.y, w.z])
+                        allNrm.append(contentsOf: [n.x, n.y, n.z])
+                        allCol.append(contentsOf: [
+                            Float(c.0) / 255, Float(c.1) / 255, Float(c.2) / 255, 1
+                        ])
+                        let id = base
+                        base += 1
+                        return id
+                    }
+                    let a = emit(i0), b = emit(i1), c = emit(i2)
+                    let d = emitMid(m01, nm01)
+                    let e = emitMid(m12, nm12)
+                    let f = emitMid(m20, nm20)
+                    allIdx.append(contentsOf: [a, d, f, d, b, e, f, e, c, d, e, f])
+                    vcTris += 4
+                    triUsed += 4
+                } else {
+                    allIdx.append(contentsOf: [emit(i0), emit(i1), emit(i2)])
+                    vcTris += 1
+                    triUsed += 1
+                }
             }
         }
 
@@ -507,11 +535,18 @@ enum PhotoTexturedMeshBuilder {
     }
 
     private static func mildEnhance(_ c: (UInt8, UInt8, UInt8)) -> (UInt8, UInt8, UInt8) {
-        func f(_ x: UInt8) -> UInt8 {
-            let v = (Float(x) / 255 - 0.5) * 1.08 + 0.5
-            return UInt8(min(255, max(0, v * 255)))
+        // Gentle contrast + saturation for clearer paint without washout
+        func f(_ x: UInt8) -> Float {
+            let v = (Float(x) / 255 - 0.5) * 1.14 + 0.5
+            return min(1, max(0, v))
         }
-        return (f(c.0), f(c.1), f(c.2))
+        var r = f(c.0), g = f(c.1), b = f(c.2)
+        let avg = (r + g + b) / 3
+        let sat: Float = 1.12
+        r = min(1, max(0, avg + (r - avg) * sat))
+        g = min(1, max(0, avg + (g - avg) * sat))
+        b = min(1, max(0, avg + (b - avg) * sat))
+        return (UInt8(r * 255), UInt8(g * 255), UInt8(b * 255))
     }
 
     private static func imageFromRGB(_ rgb: [UInt8], width: Int, height: Int) -> UIImage? {
@@ -633,7 +668,7 @@ enum PhotoTexturedMeshBuilder {
         maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
         // Cap live keyframe size for bake speed
-        let cap = min(maxWidth, 640)
+        let cap = min(maxWidth, 800)
         guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap) else { return nil }
         let cam = frame.camera
         let camPos = SIMD3<Float>(
