@@ -725,6 +725,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastKeyframeTime: TimeInterval = 0
     private var lastMeshCopyTime: TimeInterval = 0
     private var lastDepthTime: TimeInterval = 0
+    private var meshBankBusy = false
+    private var depthBusy = false
     private var lastCamPos: SIMD3<Float>?
     private var lastStatsEmit: TimeInterval = 0
     private var maxKeyframes: Int { MeshDensityConfig.maxKeyframes }
@@ -789,6 +791,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         lastKeyframeTime = 0
         lastMeshCopyTime = 0
         lastDepthTime = 0
+        meshBankBusy = false
+        depthBusy = false
+        meshBankBusy = false
+        depthBusy = false
         lastStatsEmit = 0
         lastMarkerUpdate = 0
         classCounts.removeAll()
@@ -1065,23 +1071,41 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             autoreleasepool { ingestKeyframe(from: frame) }
         }
 
-        // DENSEST-MESH bank: every ~0.55s keep denser copy of each tile
-        // (low rate = no freeze, high coverage vs finish-only harvest)
-        if ts - lastMeshCopyTime >= 0.45 {
+        // DENSEST-MESH bank — copy SYNCHRONOUSLY (ARMesh buffers invalid after callback)
+        if ts - lastMeshCopyTime >= 1.0, !meshBankBusy {
             lastMeshCopyTime = ts
+            meshBankBusy = true
             let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            if !meshes.isEmpty {
-                captureQueue.async { [weak self] in
-                    self?.accumulateDensest(meshes)
+            var copied: [CapturedMeshChunk] = []
+            copied.reserveCapacity(min(meshes.count, 8))
+            let ranked = meshes.sorted {
+                $0.geometry.vertices.count > $1.geometry.vertices.count
+            }
+            autoreleasepool {
+                for mesh in ranked.prefix(8) {
+                    if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: true) {
+                        copied.append(chunk)
+                    }
                 }
+            }
+            if !copied.isEmpty {
+                captureQueue.async { [weak self] in
+                    self?.mergeDensestChunks(copied)
+                    DispatchQueue.main.async { self?.meshBankBusy = false }
+                }
+            } else {
+                meshBankBusy = false
             }
         }
 
-        // Scene-depth color points fill holes LiDAR mesh misses (cars, dark paint)
-        if ts - lastDepthTime >= 0.40 {
+        // Depth color samples (ARFrame retained by closure — OK)
+        if ts - lastDepthTime >= 0.65, !depthBusy {
             lastDepthTime = ts
+            depthBusy = true
+            let held = frame
             captureQueue.async { [weak self] in
-                self?.ingestDepthPoints(from: frame)
+                self?.ingestDepthPoints(from: held)
+                DispatchQueue.main.async { self?.depthBusy = false }
             }
         }
 
@@ -1250,29 +1274,35 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
 
-    /// Keep densest version of each mesh tile seen during the walk
-    private func accumulateDensest(_ meshes: [ARMeshAnchor]) {
-        guard !meshes.isEmpty else { return }
-        var updates: [UUID: CapturedMeshChunk] = [:]
-        for mesh in meshes {
-            guard let chunk = Self.copyChunk(from: mesh, fullQuality: true) else { continue }
-            updates[chunk.id] = chunk
-        }
+    /// Merge pre-copied chunks (already deep-copied on session thread)
+    private func mergeDensestChunks(_ updates: [CapturedMeshChunk]) {
         guard !updates.isEmpty else { return }
         stateLock.lock()
-        for (id, chunk) in updates {
-            if let old = chunks[id],
+        for chunk in updates {
+            if let old = chunks[chunk.id],
                old.positions.count >= chunk.positions.count,
                old.indices.count >= chunk.indices.count {
                 continue
             }
-            chunks[id] = chunk
+            chunks[chunk.id] = chunk
         }
-        // Soft cap by dropping smallest tiles if huge
         if chunks.count > maxChunks {
             let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
             var keep: [UUID: CapturedMeshChunk] = [:]
             for c in ranked.prefix(maxChunks) { keep[c.id] = c }
+            chunks = keep
+        }
+        // Memory guard during long scans
+        let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
+        if verts > 900_000 {
+            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
+            var keep: [UUID: CapturedMeshChunk] = [:]
+            var v = 0
+            for c in ranked {
+                if v > 700_000 { break }
+                keep[c.id] = c
+                v += c.positions.count
+            }
             chunks = keep
         }
         stateLock.unlock()
@@ -1295,7 +1325,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let dStride = CVPixelBufferGetBytesPerRow(depthMap)
 
         // Sparse sample for speed/memory (~every 6th pixel)
-        let step = 6
+        let step = 8
         var local: [UInt64: ColoredDepthPoint] = [:]
         local.reserveCapacity((dw / step) * (dh / step) / 2)
 
@@ -1376,12 +1406,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             depthPoints[k] = p
         }
         // Cap memory ~120k points
-        if depthPoints.count > 120_000 {
+        if depthPoints.count > 60_000 {
             // Drop random half of oldest by rebuilding from suffix of keys
             let keys = Array(depthPoints.keys)
             var keep: [UInt64: ColoredDepthPoint] = [:]
-            keep.reserveCapacity(80_000)
-            for k in keys.suffix(80_000) {
+            keep.reserveCapacity(40_000)
+            for k in keys.suffix(40_000) {
                 if let p = depthPoints[k] { keep[k] = p }
             }
             depthPoints = keep
@@ -1389,7 +1419,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         stateLock.unlock()
     }
 
-    private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false) -> CapturedMeshChunk? {
+    private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false, liveBank: Bool = false) -> CapturedMeshChunk? {
         let geom = anchor.geometry
         let vSource = geom.vertices
         let nSource = geom.normals
@@ -1397,11 +1427,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let vCount = vSource.count
         guard vCount > 0, faces.count > 0 else { return nil }
 
-        // CRITICAL: never drop a whole anchor (that deleted cars/walls).
-        // Only subsample when huge. Done harvest uses step 1 unless insane.
+        // liveBank: keep most detail but soft-cap huge tiles so mid-scan never freezes
         let step: Int
-        if fullQuality {
-            step = 1  // keep every vertex — fewer holes
+        if liveBank {
+            step = vCount > 40_000 ? 2 : 1
+        } else if fullQuality {
+            step = 1  // finish harvest — keep every vertex
         } else {
             step = MeshDensityConfig.liveVertexStep(vCount: vCount)
         }
