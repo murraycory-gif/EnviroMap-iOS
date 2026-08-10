@@ -108,7 +108,7 @@ struct ToolsHomeView: View {
                                         VStack(alignment: .leading, spacing: 6) {
                                             Text("Full 3D Scan")
                                                 .font(.system(size: 26, weight: .bold, design: .rounded))
-                                            Text("Capture Everything · Real Colors")
+                                            Text("Point · Walk · Capture Your Space")
                                                 .font(.system(size: 15, weight: .semibold))
                                                 .opacity(0.95)
                                         }
@@ -116,7 +116,7 @@ struct ToolsHomeView: View {
                                         Image(systemName: "arrow.right.circle.fill")
                                             .font(.system(size: 36))
                                     }
-                                    Text("Tap To Start Mapping Your Space")
+                                    Text("Tap To Start · Just Point And Walk")
                                         .font(.system(size: 13, weight: .semibold))
                                         .opacity(0.88)
                                         .frame(maxWidth: .infinity, alignment: .leading)

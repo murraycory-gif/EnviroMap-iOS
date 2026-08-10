@@ -78,7 +78,7 @@ struct FullEnvironmentScanView: View {
     }
 
     private var scanTopBar: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack {
             Button {
                 model.stop()
                 dismiss()
@@ -86,55 +86,33 @@ struct FullEnvironmentScanView: View {
                 Image(systemName: "xmark")
                     .font(.body.weight(.bold))
                     .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 44, height: 44)
                     .background(.ultraThinMaterial, in: Circle())
             }
 
-            // Live status — compact top center
+            Spacer()
+
+            // Simple status only — no mesh jargon
             if model.phase == .scanning {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(model.meshChunks > 0 ? Color.green : Color.orange)
-                        .frame(width: 8, height: 8)
-                    Text(model.meshChunks > 0 ? "\(model.meshChunks) surfaces" : "Aim to start")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white)
-                    if model.hasColorFrames {
-                        Text("· Color")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
-            } else {
-                Text(model.statusTitle)
+                Text(model.simpleStatusTitle)
                     .font(.subheadline.weight(.bold))
                     .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.black.opacity(0.45), in: Capsule())
             }
 
-            Spacer(minLength: 0)
+            Spacer()
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(BuildStamp.id)
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
-                if model.phase == .scanning, !model.aiCoachTip.isEmpty {
-                    Text(model.aiCoachTip.replacingOccurrences(of: "AI: ", with: ""))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(1)
-                        .frame(maxWidth: 130, alignment: .trailing)
-                }
-            }
+            // Balance X button
+            Color.clear.frame(width: 44, height: 44)
         }
         .padding(.horizontal, 16)
-        .padding(.top, 10)
+        .padding(.top, 8)
     }
 
     private var scanBottomBar: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 14) {
             if case .failed(let msg) = model.phase {
                 Text(msg)
                     .font(.footnote)
@@ -149,64 +127,50 @@ struct FullEnvironmentScanView: View {
                     .padding(.vertical, 16)
                     .background(AppTheme.blue, in: RoundedRectangle(cornerRadius: 16))
             } else if model.phase == .scanning {
-                // Stats row — compact chips only
-                HStack(spacing: 8) {
-                    miniChip("\(model.meshChunks)", "Mesh")
-                    miniChip(model.coverageLabel, "Cover")
-                    miniChip(model.hasColorFrames ? "On" : "…", "Color")
+                // One clear instruction — like teaching a first-time user
+                Text(model.simpleGuide)
+                    .font(.system(size: 17, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                // Simple progress — not mesh counts
+                VStack(spacing: 6) {
+                    ProgressView(value: model.simpleProgress)
+                        .tint(model.simpleProgress >= 0.85 ? Color.green : AppTheme.blue)
+                        .scaleEffect(y: 1.4)
+                    Text(model.simpleProgressLabel)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.8))
                 }
+                .padding(.horizontal, 8)
 
                 Button {
                     model.finishScanning()
                 } label: {
-                    Label("Finish Scan", systemImage: "checkmark.circle.fill")
-                        .font(.headline.weight(.bold))
+                    Text(model.simpleProgress >= 0.85 ? "Finish" : "Finish")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
+                        .padding(.vertical, 18)
                         .background(
-                            LinearGradient(
-                                colors: [AppTheme.blue, AppTheme.blueDeep],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            ),
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(model.simpleProgress >= 0.85
+                                      ? Color.green.opacity(0.95)
+                                      : AppTheme.blue)
                         )
+                        .shadow(color: (model.simpleProgress >= 0.85 ? Color.green : AppTheme.blue).opacity(0.4), radius: 12, y: 4)
                 }
-                .disabled(model.meshChunks < 1)
-                .opacity(model.meshChunks < 1 ? 0.5 : 1)
-            } else if model.phase == .idle {
-                Button {
-                    model.start()
-                } label: {
-                    Text("Start Scanning")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                        .background(AppTheme.blue, in: RoundedRectangle(cornerRadius: 16))
-                }
+                .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 20)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 28)
     }
 
-    private func miniChip(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-
-    // MARK: - Edgy processing / loading screen
 
     private var processingLayer: some View {
         ZStack {
@@ -263,7 +227,7 @@ struct FullEnvironmentScanView: View {
                 }
 
                 VStack(spacing: 10) {
-                    Text("Building Your World")
+                    Text("Creating Your 3D View")
                     Text(BuildStamp.label)
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
@@ -283,7 +247,7 @@ struct FullEnvironmentScanView: View {
                 }
                 .padding(.top, 8)
 
-                Text("Mapping real colors onto LiDAR mesh\nHang tight — this is the magic step.")
+                Text("Mapping real colors onto LiDAR mesh\nAlmost There — this is the magic step.")
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.45))
                     .multilineTextAlignment(.center)
@@ -557,7 +521,11 @@ final class FullEnvironmentScanModel: ObservableObject {
     }
 
     @Published var phase: Phase = .idle
-    @Published var instruction = "Move slowly · cover every side"
+    @Published var instruction = "Point At Your Space And Walk Slowly"
+    @Published var simpleGuide = "Point At Your Space And Walk Slowly"
+    @Published var simpleStatusTitle = "Ready"
+    @Published var simpleProgress: Double = 0
+    @Published var simpleProgressLabel = "Getting Started"
     @Published var statusTitle = "Full 3D Scan"
     @Published var detailLine = "LiDAR + real colors"
     @Published var meshChunks = 0
@@ -586,16 +554,17 @@ final class FullEnvironmentScanModel: ObservableObject {
         coverageLabel = "—"
         phase = .scanning
         statusTitle = "Scanning"
-        instruction = "Move slowly · cover every side"
+        instruction = "Point At Your Space And Walk Slowly"
+        simpleGuide = "Point At Your Space And Walk Slowly"
+        simpleStatusTitle = "Ready"
+        simpleProgress = 0
+        simpleProgressLabel = "Getting Started"
         controller.onStats = { [weak self] chunks, frames in
             Task { @MainActor in
-                self?.meshChunks = chunks
-                self?.hasColorFrames = frames > 0
-                self?.coverageLabel = chunks > 80 ? "Great" : chunks > 35 ? "Good" : chunks > 12 ? "OK" : "Low"
-                if let tip = self?.controller.latestAITip, !tip.isEmpty {
-                    self?.aiCoachTip = tip
-                }
-                self?.detailLine = "\(chunks) mesh pieces · \(frames) color frames"
+                guard let self else { return }
+                self.meshChunks = chunks
+                self.hasColorFrames = frames > 0
+                self.applySimpleGuidance(meshCount: chunks)
             }
         }
         controller.onError = { [weak self] msg in
@@ -611,6 +580,40 @@ final class FullEnvironmentScanModel: ObservableObject {
     func rescan() {
         controller.stop()
         start()
+    }
+
+    /// Everyday language only — no mesh counts for the user.
+    @MainActor
+    private func applySimpleGuidance(meshCount: Int) {
+        if meshCount < 5 {
+            simpleGuide = "Point At Your Space And Walk Slowly"
+            simpleStatusTitle = "Starting…"
+            simpleProgress = 0.1
+            simpleProgressLabel = "Getting Started"
+        } else if meshCount < 20 {
+            simpleGuide = "Keep Walking Around What You See"
+            simpleStatusTitle = "Scanning…"
+            simpleProgress = 0.3
+            simpleProgressLabel = "Keep Going"
+        } else if meshCount < 45 {
+            simpleGuide = "Walk Around Every Side · Slow And Steady"
+            simpleStatusTitle = "Scanning…"
+            simpleProgress = 0.55
+            simpleProgressLabel = "Halfway There"
+        } else if meshCount < 70 {
+            simpleGuide = "Almost Done · Check For Empty Spots"
+            simpleStatusTitle = "Looking Good"
+            simpleProgress = 0.8
+            simpleProgressLabel = "Almost Ready"
+        } else {
+            simpleGuide = "Looking Great · Tap Finish"
+            simpleStatusTitle = "Ready"
+            simpleProgress = 1.0
+            simpleProgressLabel = "Tap Finish"
+        }
+        aiCoachTip = ""
+        detailLine = ""
+        coverageLabel = simpleProgressLabel
     }
 
     func finishScanning() {
@@ -1058,25 +1061,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func updateAICoach(meshCount: Int) {
-        guard aiCoachEnabled else {
-            latestAITip = "Blue lines = mapped"
-            return
-        }
-        // AI tips based on coverage progress + classification mix
-        if meshCount < 10 {
-            latestAITip = "Keep moving — map floors first"
-        } else if meshCount < 35 {
-            latestAITip = "Circle every side of objects"
-        } else if meshCount < 70 {
-            latestAITip = "Fill gaps · then Finish Scan"
-        } else if meshCount < 100 {
-            latestAITip = "Great coverage — Finish when ready"
-        } else {
-            latestAITip = "Plenty of mesh — Finish Scan now"
-        }
+        // Guidance is applied on the model from mesh count (simple consumer copy).
+        latestAITip = ""
     }
 
-    /// Lightweight dots so user SEES capture progress (not heavy wireframe).
     private func updateCoverageMarkersIfNeeded() {
         let now = CACurrentMediaTime()
         if now - lastMarkerUpdate < 1.2 { return }
