@@ -920,17 +920,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
         let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-        let planes = frame.anchors.compactMap { $0 as? ARPlaneAnchor }
-        print("[EnviroMap] harvest: anchors=\(frame.anchors.count) meshes=\(meshes.count) planes=\(planes.count)")
+        print("[EnviroMap] harvest: anchors=\(frame.anchors.count) meshes=\(meshes.count)")
         var fresh: [UUID: CapturedMeshChunk] = [:]
         for mesh in meshes {
             if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
-                fresh[chunk.id] = chunk
-            }
-        }
-        // Walls / floor ARKit detected — fills the big black back-wall holes
-        for plane in planes {
-            if let chunk = Self.copyPlaneChunk(from: plane) {
                 fresh[chunk.id] = chunk
             }
         }
@@ -1009,14 +1002,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
-        if let plane = anchor as? ARPlaneAnchor {
-            if let chunk = Self.copyPlaneChunk(from: plane) {
-                stateLock.lock()
-                chunks[chunk.id] = chunk
-                stateLock.unlock()
-            }
-            return
-        }
         guard let mesh = anchor as? ARMeshAnchor else { return }
         // New tiles only — cheap bank, keeps coverage without lag
         bankMeshNow(mesh, minInterval: 0.0)
