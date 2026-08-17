@@ -906,6 +906,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         harvestDone = nil
         harvestLock.unlock()
 
+        stateLock.lock()
+        let total = chunks.count
+        let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
+        stateLock.unlock()
+        print("[EnviroMap] harvest tiles=\(total) verts=\(verts)")
+    }
+
     /// Copy every ARMeshAnchor right now. Fast — no RGB, no depth, no ARFrame hold.
     private func snapshotAllMeshTiles() {
         guard let frame = arView?.session.currentFrame else {
