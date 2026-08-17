@@ -979,8 +979,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         for shell in Self.makeRoomShell(bounds: roomBounds, occ: occ) {
             walls[shell.id] = shell
         }
-            walls[shell.id] = shell
-        }
         print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count) occ=\(occ.count)")
 
         stateLock.lock()
