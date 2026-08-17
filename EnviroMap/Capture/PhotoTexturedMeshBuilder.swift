@@ -204,10 +204,7 @@ enum PhotoTexturedMeshBuilder {
             }
 
             // Prefer every triangle — only thin extreme tiles (holes > speed)
-            var triStep = 1
-            // Coverage first — only thin absurd tiles
-            if triCount > 400_000 { triStep = 2 }
-            if triUsed > triBudget * 3 { triStep = 2 }
+            let triStep = 1
 
             var remap = [Int: UInt32]()
 
@@ -264,7 +261,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.035, triUsed < triBudget {
+                if edge > 0.022, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -325,7 +322,10 @@ enum PhotoTexturedMeshBuilder {
         }
 
         if !allIdx.isEmpty {
+            smoothMesh(pos: &allPos, nrm: &allNrm, col: &allCol, idx: allIdx)
             let geom = makeVertexColorGeometry(pos: allPos, nrm: allNrm, col: allCol, idx: allIdx)
+            geom.subdivisionLevel = 1
+            geom.wantsAdaptiveSubdivision = true
             let mat = SCNMaterial()
             mat.lightingModel = .constant
             mat.isDoubleSided = true
@@ -684,6 +684,64 @@ enum PhotoTexturedMeshBuilder {
             primitiveCount: idx.count / 3, bytesPerIndex: 4
         )
         return SCNGeometry(sources: sources, elements: [element])
+    }
+
+
+    /// Soft surfaces: averaged normals + neighbor color blend (same orientation only).
+    private static func smoothMesh(pos: inout [Float], nrm: inout [Float], col: inout [Float], idx: [UInt32]) {
+        let vCount = pos.count / 3
+        guard vCount > 3, idx.count >= 3 else { return }
+
+        var accN = Array(repeating: SIMD3<Float>(0, 0, 0), count: vCount)
+        var t = 0
+        while t + 2 < idx.count {
+            let a = Int(idx[t]), b = Int(idx[t + 1]), c = Int(idx[t + 2])
+            t += 3
+            guard a < vCount, b < vCount, c < vCount else { continue }
+            let pa = SIMD3(pos[a*3], pos[a*3+1], pos[a*3+2])
+            let pb = SIMD3(pos[b*3], pos[b*3+1], pos[b*3+2])
+            let pc = SIMD3(pos[c*3], pos[c*3+1], pos[c*3+2])
+            let fn = simd_cross(pb - pa, pc - pa)
+            accN[a] += fn; accN[b] += fn; accN[c] += fn
+        }
+        for i in 0..<vCount {
+            let n = simd_normalize(accN[i])
+            let nn = n.x.isFinite ? n : SIMD3<Float>(0, 1, 0)
+            nrm[i*3] = nn.x; nrm[i*3+1] = nn.y; nrm[i*3+2] = nn.z
+        }
+
+        // Spatial hash ~4cm — blend color with similar-facing neighbors
+        var buckets: [Int64: [Int]] = [:]
+        func key(_ p: SIMD3<Float>) -> Int64 {
+            let s: Float = 25
+            let x = Int32((p.x * s).rounded())
+            let y = Int32((p.y * s).rounded())
+            let z = Int32((p.z * s).rounded())
+            return (Int64(x) << 42) ^ (Int64(y) << 21) ^ Int64(z)
+        }
+        for i in 0..<vCount {
+            let p = SIMD3(pos[i*3], pos[i*3+1], pos[i*3+2])
+            buckets[key(p), default: []].append(i)
+        }
+        var newCol = col
+        for i in 0..<vCount {
+            let p = SIMD3(pos[i*3], pos[i*3+1], pos[i*3+2])
+            let n = SIMD3(nrm[i*3], nrm[i*3+1], nrm[i*3+2])
+            var sr = Float(col[i*4]), sg = Float(col[i*4+1]), sb = Float(col[i*4+2])
+            var w: Float = 1
+            let k0 = key(p)
+            let neigh = buckets[k0] ?? []
+            for j in neigh where j != i {
+                let n2 = SIMD3(nrm[j*3], nrm[j*3+1], nrm[j*3+2])
+                if simd_dot(n, n2) < 0.82 { continue }
+                sr += col[j*4]; sg += col[j*4+1]; sb += col[j*4+2]
+                w += 1
+            }
+            newCol[i*4] = sr / w
+            newCol[i*4+1] = sg / w
+            newCol[i*4+2] = sb / w
+        }
+        col = newCol
     }
 
     private static func makeVertexColorGeometry(

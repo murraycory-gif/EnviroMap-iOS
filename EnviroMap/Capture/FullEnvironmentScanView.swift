@@ -889,6 +889,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         harvestLock.unlock()
 
         let kick = {
+            // Let ARKit finish the last tiles, then copy once
             self.snapshotAllMeshTiles()
             self.harvestLock.lock()
             self.harvestNeeded = 0
@@ -897,8 +898,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             self.harvestLock.unlock()
             s?.signal()
         }
-        if Thread.isMainThread { kick() }
-        else { DispatchQueue.main.async(execute: kick) }
+        if Thread.isMainThread {
+            kick()
+        } else {
+            Thread.sleep(forTimeInterval: 0.20)
+            DispatchQueue.main.async(execute: kick)
+        }
 
         _ = sem.wait(timeout: .now() + 3.0)
         harvestLock.lock()
@@ -1178,6 +1183,22 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         if ts - lastKeyframeTime >= kfI {
             lastKeyframeTime = ts
             autoreleasepool { ingestKeyframe(from: frame, highRes: false) }
+        }
+
+        // Bank only NEW tiles (max 2/frame) so walking fills more without freezing
+        var newBanked = 0
+        for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
+            stateLock.lock()
+            let known = chunks[mesh.identifier] != nil
+            stateLock.unlock()
+            if known { continue }
+            if let chunk = Self.copyChunk(from: mesh, fullQuality: false, liveBank: true) {
+                stateLock.lock()
+                chunks[chunk.id] = chunk
+                stateLock.unlock()
+                newBanked += 1
+                if newBanked >= 2 { break }
+            }
         }
 
         // Stats only
