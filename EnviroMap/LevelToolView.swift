@@ -2,54 +2,21 @@ import SwiftUI
 import CoreMotion
 import UIKit
 
-/// Level — same light blue Home theme. Real top bar so Back is tappable.
+/// Level — Home light theme. Portrait stacks; landscape is side-by-side so nothing clips.
 struct LevelToolView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var motion = LevelMotion()
 
     var body: some View {
-        ZStack {
-            background.ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                topBar
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 10)
-
-                Spacer(minLength: 8)
-
-                levelHUD(diameter: 280)
-                    .frame(maxWidth: .infinity)
-
-                Spacer(minLength: 8)
-
-                VStack(spacing: 12) {
-                    Text(String(format: "%.0f°", motion.primaryDeg))
-                        .font(.system(size: 56, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.text)
-                        .contentTransition(.numericText())
-
-                    Text(motion.isLevel ? "Level" : motion.hint)
-                        .font(.subheadline.weight(.bold))
-                        .tracking(0.6)
-                        .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.textSecondary)
-
-                    HStack(spacing: 10) {
-                        metricCard(motion.axisAName, motion.axisADeg)
-                        metricCard(motion.axisBName, motion.axisBDeg)
-                    }
-                    .padding(.horizontal, 20)
-
-                    Text(motion.instruction)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(AppTheme.textSecondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 28)
-                        .padding(.bottom, 8)
+        GeometryReader { geo in
+            let landscape = geo.size.width > geo.size.height + 20
+            ZStack {
+                background.ignoresSafeArea()
+                if landscape {
+                    landscapeBody(size: geo.size)
+                } else {
+                    portraitBody(size: geo.size)
                 }
-                .padding(.bottom, 16)
             }
         }
         .navigationBarBackButtonHidden(true)
@@ -59,6 +26,102 @@ struct LevelToolView: View {
         .preferredColorScheme(.light)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
+    }
+
+    // MARK: - Portrait
+
+    private func portraitBody(size: CGSize) -> some View {
+        VStack(spacing: 0) {
+            topBar
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 10)
+
+            Spacer(minLength: 8)
+
+            levelHUD(diameter: min(size.width * 0.72, 280))
+                .frame(maxWidth: .infinity)
+
+            Spacer(minLength: 8)
+
+            statsBlock(compact: false)
+                .padding(.bottom, 16)
+        }
+    }
+
+    // MARK: - Landscape (Side) — HUD left, numbers right, all on screen
+
+    private func landscapeBody(size: CGSize) -> some View {
+        let hud = min(size.height * 0.72, size.width * 0.38, 240)
+        return VStack(spacing: 0) {
+            topBar
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 6)
+
+            HStack(alignment: .center, spacing: 16) {
+                levelHUD(diameter: hud)
+                    .frame(width: hud, height: hud)
+                    .padding(.leading, 16)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(String(format: "%.0f°", motion.primaryDeg))
+                        .font(.system(size: 44, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.text)
+                        .contentTransition(.numericText())
+                        .minimumScaleFactor(0.7)
+                        .lineLimit(1)
+
+                    Text(motion.isLevel ? "Level" : motion.hint)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.textSecondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+
+                    HStack(spacing: 8) {
+                        metricCard(motion.axisAName, motion.axisADeg)
+                        metricCard(motion.axisBName, motion.axisBDeg)
+                    }
+
+                    Text(motion.instruction)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 16)
+            }
+            .frame(maxHeight: .infinity)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func statsBlock(compact: Bool) -> some View {
+        VStack(spacing: compact ? 8 : 12) {
+            Text(String(format: "%.0f°", motion.primaryDeg))
+                .font(.system(size: compact ? 40 : 56, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.text)
+                .contentTransition(.numericText())
+
+            Text(motion.isLevel ? "Level" : motion.hint)
+                .font(.subheadline.weight(.bold))
+                .tracking(0.6)
+                .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.textSecondary)
+
+            HStack(spacing: 10) {
+                metricCard(motion.axisAName, motion.axisADeg)
+                metricCard(motion.axisBName, motion.axisBDeg)
+            }
+            .padding(.horizontal, 20)
+
+            Text(motion.instruction)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(AppTheme.textSecondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 28)
+        }
     }
 
     private var topBar: some View {
@@ -123,6 +186,8 @@ struct LevelToolView: View {
             Text(String(format: "%+.1f°", value))
                 .font(.title3.weight(.bold).monospacedDigit())
                 .foregroundStyle(AppTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
