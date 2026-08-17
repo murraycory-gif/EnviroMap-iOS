@@ -261,7 +261,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.022, triUsed < triBudget {
+                if edge > 0.016, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -324,8 +324,6 @@ enum PhotoTexturedMeshBuilder {
         if !allIdx.isEmpty {
             smoothMesh(pos: &allPos, nrm: &allNrm, col: &allCol, idx: allIdx)
             let geom = makeVertexColorGeometry(pos: allPos, nrm: allNrm, col: allCol, idx: allIdx)
-            geom.subdivisionLevel = 1
-            geom.wantsAdaptiveSubdivision = true
             let mat = SCNMaterial()
             mat.lightingModel = .constant
             mat.isDoubleSided = true
@@ -710,38 +708,7 @@ enum PhotoTexturedMeshBuilder {
             nrm[i*3] = nn.x; nrm[i*3+1] = nn.y; nrm[i*3+2] = nn.z
         }
 
-        // Spatial hash ~4cm — blend color with similar-facing neighbors
-        var buckets: [Int64: [Int]] = [:]
-        func key(_ p: SIMD3<Float>) -> Int64 {
-            let s: Float = 25
-            let x = Int32((p.x * s).rounded())
-            let y = Int32((p.y * s).rounded())
-            let z = Int32((p.z * s).rounded())
-            return (Int64(x) << 42) ^ (Int64(y) << 21) ^ Int64(z)
-        }
-        for i in 0..<vCount {
-            let p = SIMD3(pos[i*3], pos[i*3+1], pos[i*3+2])
-            buckets[key(p), default: []].append(i)
-        }
-        var newCol = col
-        for i in 0..<vCount {
-            let p = SIMD3(pos[i*3], pos[i*3+1], pos[i*3+2])
-            let n = SIMD3(nrm[i*3], nrm[i*3+1], nrm[i*3+2])
-            var sr = Float(col[i*4]), sg = Float(col[i*4+1]), sb = Float(col[i*4+2])
-            var w: Float = 1
-            let k0 = key(p)
-            let neigh = buckets[k0] ?? []
-            for j in neigh where j != i {
-                let n2 = SIMD3(nrm[j*3], nrm[j*3+1], nrm[j*3+2])
-                if simd_dot(n, n2) < 0.82 { continue }
-                sr += col[j*4]; sg += col[j*4+1]; sb += col[j*4+2]
-                w += 1
-            }
-            newCol[i*4] = sr / w
-            newCol[i*4+1] = sg / w
-            newCol[i*4+2] = sb / w
-        }
-        col = newCol
+        // Do NOT average vertex colors — that turned the Tesla into pixels.
     }
 
     private static func makeVertexColorGeometry(
