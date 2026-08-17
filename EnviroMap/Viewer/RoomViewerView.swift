@@ -219,25 +219,28 @@ struct MeshSceneView: UIViewRepresentable {
             }
         }
 
-        /// Frame camera on the actual mesh so user sees the scan immediately (not empty sky).
+        /// Frame the whole scan from a 3/4 side view — never start on the ceiling.
         static func frameMesh(in view: SCNView, scene: SCNScene, coordinator: Coordinator? = nil) {
-            // Ensure materials visible
             scene.background.contents = UIColor.black
             PhotoTexturedMeshBuilder.normalizeForPreview(scene)
 
             let mesh = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
 
-            // World-space bounds of LiDAR only (skip walls so we don't sit inside a box)
-            var minV = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
-            var maxV = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+            var minAll = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var maxAll = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
             var found = false
+            var boxes: [(min: SIMD3<Float>, max: SIMD3<Float>, mid: SIMD3<Float>, isWall: Bool)] = []
             func visit(_ n: SCNNode) {
-                if let name = n.name, name.hasPrefix("photoWall") {
-                    for c in n.childNodes { visit(c) }
-                    return
-                }
                 if let g = n.geometry {
                     let (bmin, bmax) = g.boundingBox
+                    let midL = SCNVector3(
+                        (bmin.x + bmax.x) * 0.5,
+                        (bmin.y + bmax.y) * 0.5,
+                        (bmin.z + bmax.z) * 0.5
+                    )
+                    let wmid = n.convertPosition(midL, to: scene.rootNode)
+                    var mn = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+                    var mx = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
                     let corners: [SCNVector3] = [
                         SCNVector3(bmin.x, bmin.y, bmin.z), SCNVector3(bmax.x, bmin.y, bmin.z),
                         SCNVector3(bmin.x, bmax.y, bmin.z), SCNVector3(bmax.x, bmax.y, bmin.z),
@@ -247,10 +250,15 @@ struct MeshSceneView: UIViewRepresentable {
                     for c in corners {
                         let w = n.convertPosition(c, to: scene.rootNode)
                         if w.x.isFinite && w.y.isFinite && w.z.isFinite {
-                            minV = simd_min(minV, SIMD3(w.x, w.y, w.z))
-                            maxV = simd_max(maxV, SIMD3(w.x, w.y, w.z))
+                            mn = simd_min(mn, SIMD3(w.x, w.y, w.z))
+                            mx = simd_max(mx, SIMD3(w.x, w.y, w.z))
                             found = true
                         }
+                    }
+                    if found {
+                        minAll = simd_min(minAll, mn)
+                        maxAll = simd_max(maxAll, mx)
+                        boxes.append((mn, mx, SIMD3(wmid.x, wmid.y, wmid.z), (n.name ?? "").hasPrefix("photoWall")))
                     }
                 }
                 for c in n.childNodes { visit(c) }
@@ -258,41 +266,59 @@ struct MeshSceneView: UIViewRepresentable {
             visit(mesh)
             guard found else { return }
 
-            // Full garage — camera stays OUTSIDE the box so you see the whole scan
-            let cx = (minV.x + maxV.x) * 0.5
-            let cy = (minV.y + maxV.y) * 0.5
-            let cz = (minV.z + maxV.z) * 0.5
-            let sx = max(maxV.x - minV.x, 0.4)
-            let sy = max(maxV.y - minV.y, 0.4)
-            let sz = max(maxV.z - minV.z, 0.4)
-            let radius = max(max(sx, sy), sz) * 0.5
-            let dist = radius * 2.45
-            coordinator?.lookTarget = SIMD3(cx, cy, cz)
+            let cx = (minAll.x + maxAll.x) * 0.5
+            let cy = (minAll.y + maxAll.y) * 0.5
+            let cz = (minAll.z + maxAll.z) * 0.5
+            let sx = max(maxAll.x - minAll.x, 0.6)
+            let sy = max(maxAll.y - minAll.y, 0.6)
+            let sz = max(maxAll.z - minAll.z, 0.6)
 
-            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
+            var lookSum = SIMD3<Float>(0, 0, 0)
+            var lookN: Float = 0
+            let yLo = minAll.y + sy * 0.22
+            let yHi = minAll.y + sy * 0.62
+            for b in boxes where !b.isWall {
+                if b.mid.y >= yLo && b.mid.y <= yHi {
+                    lookSum += b.mid
+                    lookN += 1
+                }
+            }
+            var lx = cx, ly = cy, lz = cz
+            if lookN > 2 {
+                lx = lookSum.x / lookN
+                ly = lookSum.y / lookN
+                lz = lookSum.z / lookN
+            }
+            ly = min(max(ly, minAll.y + sy * 0.28), minAll.y + sy * 0.52)
 
+            let horiz = max(sx, sz)
+            let dist = max(horiz * 0.95, sy * 1.15)
+            // Stand at chest height, 3/4 side — this is the “I can see the car” view
+            let camY = min(ly + 0.85, maxAll.y - 0.15)
             let cam = SCNNode()
             cam.name = "previewCam"
             cam.camera = SCNCamera()
-            cam.camera?.fieldOfView = 62
+            cam.camera?.fieldOfView = 50
             cam.camera?.zNear = 0.05
-            cam.camera?.zFar = Double(max(200, radius * 80))
-            // High 3/4 corner — never spawn inside the room
+            cam.camera?.zFar = Double(max(200, horiz * 40))
             cam.position = SCNVector3(
-                cx + dist * 0.72,
-                maxV.y + radius * 0.35,
-                cz + dist * 0.72
+                lx + dist * 0.78,
+                camY,
+                lz + dist * 0.52
             )
-            cam.look(at: SCNVector3(cx, cy, cz))
+            cam.look(at: SCNVector3(lx, ly, lz))
+            coordinator?.lookTarget = SIMD3(lx, ly, lz)
+
+            scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
             scene.rootNode.addChildNode(cam)
 
             view.pointOfView = cam
             view.defaultCameraController.pointOfView = cam
-            view.defaultCameraController.target = SCNVector3(cx, cy, cz)
+            view.defaultCameraController.target = SCNVector3(lx, ly, lz)
             view.defaultCameraController.interactionMode = .orbitTurntable
             view.defaultCameraController.inertiaEnabled = true
-            view.defaultCameraController.maximumVerticalAngle = 89
-            view.defaultCameraController.minimumVerticalAngle = -80
+            view.defaultCameraController.maximumVerticalAngle = 80
+            view.defaultCameraController.minimumVerticalAngle = -25
             view.allowsCameraControl = true
             view.autoenablesDefaultLighting = true
             view.isPlaying = true

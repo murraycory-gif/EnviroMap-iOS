@@ -210,22 +210,21 @@ enum PhotoTexturedMeshBuilder {
                         let n = worldN(vi)
                         let toCam = kf.camPos - w
                         let dist = simd_length(toCam)
-                        if dist < 0.04 || dist > 12 { continue }
+                        if dist < 0.08 || dist > 4.5 { continue }
                         let facing = abs(simd_dot(n, toCam / max(dist, 1e-4)))
-                        if facing < 0.35 { continue }
+                        if facing < 0.45 { continue }
                         guard let uv = projectUV(world: w, kf: kf) else { continue }
                         hits += 1
                         distSum += dist
                         minU = min(minU, uv.x); maxU = max(maxU, uv.x)
                         minV = min(minV, uv.y); maxV = max(maxV, uv.y)
                     }
-                    guard hits >= 5 else { continue }
+                    guard hits >= 6 else { continue }
                     let uvSpan = max(maxU - minU, maxV - minV)
-                    // A small tile must not use a photo of the whole room
-                    if uvSpan > 0.72 { continue }
+                    if uvSpan > 0.48 { continue }
                     let avgD = distSum / Float(hits)
                     let sharp = Float(max(kf.rgbWidth, 320)) / 640
-                    let score = Float(hits) * sharp / max(avgD * avgD, 0.12) / max(uvSpan, 0.04)
+                    let score = Float(hits) * sharp / max(avgD * avgD, 0.08) / max(uvSpan, 0.03)
                     if score > bestScore {
                         bestScore = score
                         chunkKf = ki
@@ -286,9 +285,10 @@ enum PhotoTexturedMeshBuilder {
                     for (ki, kf) in kfs.enumerated() {
                         let toCam = kf.camPos - mid
                         let dist = simd_length(toCam)
-                        if dist < 0.04 || dist > 12 { continue }
+                        let maxD: Float = chunk.isBackdrop ? 8.0 : 4.2
+                        if dist < 0.08 || dist > maxD { continue }
                         let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
-                        if facing < 0.28 { continue }
+                        if facing < (chunk.isBackdrop ? 0.28 : 0.42) { continue }
                         // Don't stamp the car onto the ceiling — photo must face this surface
                         if chunk.isBackdrop {
                             let m = kf.worldToCam
@@ -297,7 +297,7 @@ enum PhotoTexturedMeshBuilder {
                         }
                         if projectUV(world: mid, kf: kf) == nil { continue }
                         let sharp = Float(max(kf.rgbWidth, 320)) / 640
-                        let score = facing * sharp / max(dist, 0.35)
+                        let score = facing * sharp / max(dist * dist, 0.18)
                         if score > bestScore {
                             bestScore = score
                             triKf = ki
@@ -1144,14 +1144,14 @@ enum PhotoTexturedMeshBuilder {
 
         scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
 
-        let dist = safe * 2.2
+        let dist = safe * 1.35
         let cam = SCNNode()
         cam.name = "previewCam"
         cam.camera = SCNCamera()
-        cam.camera?.fieldOfView = 48
-        cam.camera?.zNear = 0.01
+        cam.camera?.fieldOfView = 50
+        cam.camera?.zNear = 0.05
         cam.camera?.zFar = max(200, Double(safe * 40))
-        cam.position = SCNVector3(dist * 0.55, dist * 0.4, dist * 0.95)
+        cam.position = SCNVector3(dist * 0.78, safe * 0.22, dist * 0.52)
         cam.look(at: SCNVector3Zero)
         scene.rootNode.addChildNode(cam)
 
