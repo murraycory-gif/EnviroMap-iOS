@@ -46,15 +46,14 @@ struct ToolsHomeView: View {
 
     private var roomCount: Int { store.sessions.count }
 
-    /// 2-across grid items (measure + post-scan)
-    private var gridItems: [HomeGridItem] {
+    /// Full-width blue tools (Walk removed — not shipping AR Walk yet)
+    private var toolItems: [HomeGridItem] {
         [
-            .init(title: "Walk", subtitle: "AR Walk", icon: "figure.walk", needsScan: true, route: nil, action: .walk),
-            .init(title: "Design", subtitle: "Furniture", icon: "sofa.fill", needsScan: false, route: .roomPlan, action: .route),
-            .init(title: "Ruler", subtitle: "Distance", icon: "ruler", needsScan: false, route: .ruler, action: .route),
-            .init(title: "Level", subtitle: "Flat Check", icon: "level", needsScan: false, route: .level, action: .route),
-            .init(title: "Area", subtitle: "Sq Ft", icon: "square.dashed", needsScan: false, route: .area, action: .route),
-            .init(title: "Plan", subtitle: "Room Plan", icon: "square.grid.3x3.topleft.filled", needsScan: false, route: .planner, action: .route),
+            .init(title: "Design", subtitle: "Furniture · Layout Your Space", icon: "sofa.fill", needsScan: false, route: .roomPlan, action: .route),
+            .init(title: "Ruler", subtitle: "Measure Distance In Your Space", icon: "ruler", needsScan: false, route: .ruler, action: .route),
+            .init(title: "Level", subtitle: "Check Flat · Upright · Side", icon: "level", needsScan: false, route: .level, action: .route),
+            .init(title: "Area", subtitle: "Measure Square Footage", icon: "square.dashed", needsScan: false, route: .area, action: .route),
+            .init(title: "Plan", subtitle: "Room Plan From Your Scan", icon: "square.grid.3x3.topleft.filled", needsScan: false, route: .planner, action: .route),
         ]
     }
 
@@ -89,7 +88,7 @@ struct ToolsHomeView: View {
                             Text("Map Your Space")
                                 .font(.system(size: 24, weight: .bold, design: .rounded))
                                 .foregroundStyle(AppTheme.text)
-                                .padding(.top, 4)
+                                .padding(.top, 10)
 
                             // Primary stack: Full 3D Scan → 3D View → My Rooms
                             Button {
@@ -150,17 +149,20 @@ struct ToolsHomeView: View {
                                 .foregroundStyle(AppTheme.textSecondary)
                                 .padding(.top, 6)
 
-                            // 2-across grid
-                            LazyVGrid(
-                                columns: [
-                                    GridItem(.flexible(), spacing: 10),
-                                    GridItem(.flexible(), spacing: 10),
-                                ],
-                                spacing: 10
-                            ) {
-                                ForEach(gridItems) { item in
-                                    gridButton(item)
+                            ForEach(toolItems) { item in
+                                Button {
+                                    if let route = item.route {
+                                        path.append(route)
+                                    }
+                                } label: {
+                                    primaryHeroCard(
+                                        title: item.title,
+                                        subtitle: item.subtitle,
+                                        icon: item.icon,
+                                        gradient: true
+                                    )
                                 }
+                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.horizontal, 20)
