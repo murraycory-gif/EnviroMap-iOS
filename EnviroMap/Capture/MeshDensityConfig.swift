@@ -1,21 +1,20 @@
 import Foundation
 
-/// Walk-speed capture · O-style sharp color · AF-style reliable harvest.
+/// AF coverage + O-style sharp single-view color (no gray blobs).
 enum MeshDensityConfig {
     static var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
     }
 
-    /// Color often enough at walking speed, not every frame
     static func keyframeInterval(movingFast: Bool) -> TimeInterval {
-        movingFast ? 0.09 : 0.14
+        movingFast ? 0.10 : 0.16
     }
 
     static var maxKeyframes: Int { 96 }
     static var maxChunks: Int { 12_000 }
 
-    static var liveKeyframeMaxWidth: Int { 800 }
-    static var keyframeMaxWidth: Int { 800 }
+    static var liveKeyframeMaxWidth: Int { 960 }
+    static var keyframeMaxWidth: Int { 960 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }
     static var meshCopyInterval: TimeInterval { 999 }
@@ -25,8 +24,8 @@ enum MeshDensityConfig {
     static func liveFaceStep(faceCount: Int) -> Int { 1 }
 
     static var finalVertexSoftCap: Int { 3_500_000 }
-    static var triangleBudget: Int { highDetail ? 1_200_000 : 700_000 }
-    static var bakeKeyframeLimit: Int { 40 }
+    static var triangleBudget: Int { highDetail ? 1_400_000 : 800_000 }
+    static var bakeKeyframeLimit: Int { 72 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 

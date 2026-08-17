@@ -188,8 +188,6 @@ enum PhotoTexturedMeshBuilder {
                         UInt8(min(255, max(0, v.y * 255))),
                         UInt8(min(255, max(0, v.z * 255)))
                     )
-                } else if colorBudgetExhausted {
-                    c = Self.visibleGray
                 } else {
                     c = fastColor(world: worldP(i), normal: worldN(i), keyframes: kfs)
                 }
@@ -463,17 +461,25 @@ enum PhotoTexturedMeshBuilder {
 
         var bestW: Float = -1
         var bestC: (UInt8, UInt8, UInt8)?
+        var anyC: (UInt8, UInt8, UInt8)?
+        var anyD = Float.greatestFiniteMagnitude
 
-        // Single best photo (Build O clarity) — blending two views smears paint
         for kf in keyframes.reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.05 || dist > 7 { continue }
+            if dist < 0.04 || dist > 8 { continue }
+            if let uv = projectUV(world: world, kf: kf),
+               let c = sampleBilinear(kf, u: uv.x, v: uv.y) {
+                if dist < anyD {
+                    anyD = dist
+                    anyC = c
+                }
+            }
             let viewDir = toCam / max(dist, 1e-4)
             let facing = abs(simd_dot(normal, viewDir))
-            if facing < 0.05 { continue }
+            if facing < 0.04 { continue }
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-            if view.z > -0.04 { continue }
+            if view.z > -0.03 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
@@ -481,10 +487,11 @@ enum PhotoTexturedMeshBuilder {
             if w > bestW {
                 bestW = w
                 bestC = c
-                if w > 1.2 { break }
+                if w > 1.6 { break }
             }
         }
         if let c = bestC { return mildEnhance(c) }
+        if let c = anyC { return mildEnhance(c) }
         return (170, 172, 176)
     }
 

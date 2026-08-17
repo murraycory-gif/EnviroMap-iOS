@@ -881,41 +881,30 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var harvestDone: DispatchSemaphore?
 
     func forceFinalHarvest() {
-        // Two fast mesh snapshots ~0.4s apart. Mesh only — never decode camera
-        // (that retained ARFrames and zeroed the harvest).
-        func oneShot() {
-            let sem = DispatchSemaphore(value: 0)
-            harvestLock.lock()
-            harvestDone = sem
-            harvestNeeded = 1
-            harvestLock.unlock()
-            let kick = {
-                self.snapshotAllMeshTiles()
-                self.harvestLock.lock()
-                self.harvestNeeded = 0
-                let s = self.harvestDone
-                self.harvestDone = nil
-                self.harvestLock.unlock()
-                s?.signal()
-            }
-            if Thread.isMainThread { kick() }
-            else { DispatchQueue.main.async(execute: kick) }
-            _ = sem.wait(timeout: .now() + 2.5)
-            harvestLock.lock()
-            harvestNeeded = 0
-            harvestDone = nil
-            harvestLock.unlock()
-        }
-        oneShot()
-        Thread.sleep(forTimeInterval: 0.40)
-        oneShot()
+        // One fast mesh snapshot (AF coverage). Two-pass AG cut the car.
+        let sem = DispatchSemaphore(value: 0)
+        harvestLock.lock()
+        harvestDone = sem
+        harvestNeeded = 1
+        harvestLock.unlock()
 
-        stateLock.lock()
-        let total = chunks.count
-        let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
-        stateLock.unlock()
-        print("[EnviroMap] harvest tiles=\(total) verts=\(verts)")
-    }
+        let kick = {
+            self.snapshotAllMeshTiles()
+            self.harvestLock.lock()
+            self.harvestNeeded = 0
+            let s = self.harvestDone
+            self.harvestDone = nil
+            self.harvestLock.unlock()
+            s?.signal()
+        }
+        if Thread.isMainThread { kick() }
+        else { DispatchQueue.main.async(execute: kick) }
+
+        _ = sem.wait(timeout: .now() + 3.0)
+        harvestLock.lock()
+        harvestNeeded = 0
+        harvestDone = nil
+        harvestLock.unlock()
 
     /// Copy every ARMeshAnchor right now. Fast — no RGB, no depth, no ARFrame hold.
     private func snapshotAllMeshTiles() {
