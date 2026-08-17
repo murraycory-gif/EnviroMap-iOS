@@ -273,9 +273,8 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Small LiDAR tiles (Tesla): one photo. Big wall sheets: per-triangle
-                // so a single garage shot cannot paint the whole wall black.
-                var triKf: Int? = (vCount < 800) ? chunkKf : nil
+                // Backdrop walls: always per-triangle photos. Small tiles: one photo.
+                var triKf: Int? = (chunk.isBackdrop || vCount >= 800) ? nil : chunkKf
                 if triKf == nil || projectUV(world: mid, kf: kfs[triKf!]) == nil {
                     var bestScore: Float = -1
                     for (ki, kf) in kfs.enumerated() {
@@ -302,8 +301,10 @@ enum PhotoTexturedMeshBuilder {
                     let wMax = max(e01, max(e12, e20))
                     let uvArea = abs((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y))
                     // Skip stretched UVs (that's the AK mess)
-                    let stretchOK = wMax < 1.25 && uvArea > 2e-6 && t01 > 1e-5 && e01 > 1e-4 &&
-                        abs((t01 / max(e01, 1e-4)) - (t12 / max(e12, 1e-4))) < 8
+                    let stretchOK = chunk.isBackdrop
+                        ? (uvArea > 1e-7 && t01 > 1e-6)
+                        : (wMax < 1.25 && uvArea > 2e-6 && t01 > 1e-5 && e01 > 1e-4 &&
+                            abs((t01 / max(e01, 1e-4)) - (t12 / max(e12, 1e-4))) < 8)
                     if stretchOK {
                         func pushTex(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
                             texPos[ki].append(contentsOf: [w.x, w.y, w.z])
@@ -578,7 +579,7 @@ enum PhotoTexturedMeshBuilder {
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
             let luma = (Float(c.0) + Float(c.1) + Float(c.2)) / (3 * 255)
-            if luma > 0.93, facing < 0.45 { continue } // skip blown specular
+            if luma > 0.98, facing < 0.35 { continue } // only skip blown specular, keep drywall
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
             let w = Float(facing * facing) * (1 / max(dist * dist, 0.04)) * (0.35 + 0.65 * center)
             if w > bestW {

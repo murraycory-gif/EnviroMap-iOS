@@ -713,6 +713,8 @@ struct CapturedMeshChunk {
     let indices: [UInt32]
     /// Optional baked vertex colors (0...1) for depth-fused mesh
     let colors: [SIMD3<Float>]?
+    /// True for ARKit wall/ceiling sheets — always keep and always paint
+    let isBackdrop: Bool
 
     init(
         id: UUID,
@@ -720,7 +722,8 @@ struct CapturedMeshChunk {
         positions: [SIMD3<Float>],
         normals: [SIMD3<Float>],
         indices: [UInt32],
-        colors: [SIMD3<Float>]? = nil
+        colors: [SIMD3<Float>]? = nil,
+        isBackdrop: Bool = false
     ) {
         self.id = id
         self.transform = transform
@@ -728,6 +731,7 @@ struct CapturedMeshChunk {
         self.normals = normals
         self.indices = indices
         self.colors = colors
+        self.isBackdrop = isBackdrop
     }
 }
 
@@ -968,12 +972,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             let pushed = CapturedMeshChunk(
                 id: raw.id, transform: t,
                 positions: raw.positions, normals: raw.normals,
-                indices: raw.indices, colors: raw.colors
+                indices: raw.indices, colors: raw.colors,
+                isBackdrop: true
             )
             if let clipped = Self.clipPlaneOffObjects(pushed, occ: occ) {
-                // If most of the plane was on objects, it is the car — drop it
-                let before = max(raw.indices.count, 1)
-                if clipped.indices.count * 100 / before < 65 { continue }
+                // Keep whatever is left — do NOT drop the whole wall
                 walls[clipped.id] = clipped
             }
         }
@@ -1598,7 +1601,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         return CapturedMeshChunk(
             id: chunk.id, transform: chunk.transform,
             positions: chunk.positions, normals: chunk.normals,
-            indices: keep, colors: chunk.colors
+            indices: keep, colors: chunk.colors, isBackdrop: chunk.isBackdrop
         )
     }
 
@@ -1654,7 +1657,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             transform: plane.transform,
             positions: positions,
             normals: normals,
-            indices: indices
+            indices: indices,
+            isBackdrop: true
         )
     }
 
