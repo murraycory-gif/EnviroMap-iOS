@@ -925,20 +925,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 fresh[chunk.id] = chunk
             }
         }
-        // Planes = real walls / floor / ceiling ARKit locked (Polycam + RoomPlan do this)
-        var planeChunks: [UUID: CapturedMeshChunk] = [:]
-        for plane in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) {
-            let ext = hypot(plane.extent.x, plane.extent.z)
-            guard ext >= 0.40 else { continue }
-            if let chunk = Self.copyPlaneChunk(from: plane) {
-                planeChunks[chunk.id] = chunk
-            }
-        }
+        // Mesh tiles only. Planes painted giant white slabs through the Tesla.
         stateLock.lock()
         for (id, chunk) in fresh { chunks[id] = chunk }
-        for (id, chunk) in planeChunks where chunks[id] == nil {
-            chunks[id] = chunk
-        }
         stateLock.unlock()
         ingestKeyframe(from: frame, highRes: true)
     }
