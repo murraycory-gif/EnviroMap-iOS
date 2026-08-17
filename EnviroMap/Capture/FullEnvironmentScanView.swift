@@ -980,6 +980,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 walls[clipped.id] = clipped
             }
         }
+        if walls.count < 2 {
+            for shell in Self.makeRoomShell(from: Array(fresh.values), occ: occ) {
+                walls[shell.id] = shell
+            }
+        }
         print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count) occ=\(occ.count)")
 
         stateLock.lock()
@@ -1552,28 +1557,33 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         return (ix & 0x1FFFFF) << 42 | (iy & 0x1FFFFF) << 21 | (iz & 0x1FFFFF)
     }
 
-    /// Occupied cells around real LiDAR verts (car, tools) so wall quads cannot slice them.
+    /// Only the INSIDE of the room (car, clutter). Wall verts sit on the AABB
+    /// faces — if we occupy those, the wall sheet gets deleted (BT failure).
     private static func objectOccupancy(from chunks: [CapturedMeshChunk]) -> Set<Int64> {
-        var occ = Set<Int64>()
-        occ.reserveCapacity(8_000)
+        var minP = SIMD3<Float>(repeating: 1e9)
+        var maxP = SIMD3<Float>(repeating: -1e9)
+        var worlds: [SIMD3<Float>] = []
+        worlds.reserveCapacity(8_000)
         for chunk in chunks {
             let t = chunk.transform
             for p in chunk.positions {
                 let w4 = t * SIMD4<Float>(p.x, p.y, p.z, 1)
                 let w = SIMD3<Float>(w4.x, w4.y, w4.z)
-                if w.y < 0.08 || w.y > 1.85 { continue }
-                let k = cellKey(w)
-                occ.insert(k)
-                // 1-cell halo so the wall stops short of the paint
-                for dx in Int64(-1)...1 {
-                    for dy in Int64(-1)...1 {
-                        for dz in Int64(-1)...1 {
-                            occ.insert(k &+ (dx << 42) &+ (dy << 21) &+ dz)
-                        }
-                    }
-                }
+                worlds.append(w)
+                minP = simd_min(minP, w)
+                maxP = simd_max(maxP, w)
             }
-            if occ.count > 80_000 { break }
+        }
+        let inset: Float = 0.45
+        let iMin = SIMD3(minP.x + inset, minP.y + 0.12, minP.z + inset)
+        let iMax = SIMD3(maxP.x - inset, maxP.y - 0.15, maxP.z - inset)
+        var occ = Set<Int64>()
+        occ.reserveCapacity(6_000)
+        for w in worlds {
+            if w.x < iMin.x || w.x > iMax.x { continue }
+            if w.y < iMin.y || w.y > iMax.y { continue }
+            if w.z < iMin.z || w.z > iMax.z { continue }
+            occ.insert(cellKey(w))
         }
         return occ
     }
@@ -1603,6 +1613,70 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             positions: chunk.positions, normals: chunk.normals,
             indices: keep, colors: chunk.colors, isBackdrop: chunk.isBackdrop
         )
+    }
+
+    /// 4 walls from the scan bounding box when ARKit didn't lock enough planes.
+    private static func makeRoomShell(from chunks: [CapturedMeshChunk], occ: Set<Int64>) -> [CapturedMeshChunk] {
+        var minP = SIMD3<Float>(repeating: 1e9)
+        var maxP = SIMD3<Float>(repeating: -1e9)
+        for chunk in chunks {
+            let t = chunk.transform
+            for p in chunk.positions {
+                let w = t * SIMD4<Float>(p.x, p.y, p.z, 1)
+                minP = simd_min(minP, SIMD3(w.x, w.y, w.z))
+                maxP = simd_max(maxP, SIMD3(w.x, w.y, w.z))
+            }
+        }
+        let size = maxP - minP
+        guard size.x > 1.4, size.z > 1.4, size.y > 1.0 else { return [] }
+        let y0 = minP.y + 0.04
+        let y1 = maxP.y
+        let faces: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float, Float)] = [
+            (SIMD3(minP.x, y0, minP.z), SIMD3(0, 0, 1), SIMD3(0, 1, 0), size.z, y1 - y0),
+            (SIMD3(maxP.x, y0, minP.z), SIMD3(0, 0, 1), SIMD3(0, 1, 0), size.z, y1 - y0),
+            (SIMD3(minP.x, y0, minP.z), SIMD3(1, 0, 0), SIMD3(0, 1, 0), size.x, y1 - y0),
+            (SIMD3(minP.x, y0, maxP.z), SIMD3(1, 0, 0), SIMD3(0, 1, 0), size.x, y1 - y0),
+        ]
+        var out: [CapturedMeshChunk] = []
+        let step: Float = 0.30
+        for (i, f) in faces.enumerated() {
+            let (o, u, v, uLen, vLen) = f
+            let nu = max(1, Int(ceil(uLen / step)))
+            let nv = max(1, Int(ceil(vLen / step)))
+            var pos: [SIMD3<Float>] = []
+            var nrm: [SIMD3<Float>] = []
+            let n = simd_normalize(simd_cross(u, v))
+            for iv in 0...nv {
+                let tv = Float(iv) / Float(nv)
+                for iu in 0...nu {
+                    let tu = Float(iu) / Float(nu)
+                    pos.append(o + u * (tu * uLen) + v * (tv * vLen))
+                    nrm.append(n)
+                }
+            }
+            var idx: [UInt32] = []
+            let stride = nu + 1
+            for iv in 0..<nv {
+                for iu in 0..<nu {
+                    let a = UInt32(iv * stride + iu)
+                    let b = a + 1
+                    let c = a + UInt32(stride)
+                    let d = c + 1
+                    idx.append(contentsOf: [a, c, b, b, c, d])
+                }
+            }
+            let raw = CapturedMeshChunk(
+                id: UUID(),
+                transform: matrix_identity_float4x4,
+                positions: pos, normals: nrm, indices: idx,
+                isBackdrop: true
+            )
+            if let clipped = clipPlaneOffObjects(raw, occ: occ) {
+                out.append(clipped)
+            }
+            _ = i
+        }
+        return out
     }
 
     /// Full wall/ceiling rectangle from ARKit extent (not the scrap polygon).
