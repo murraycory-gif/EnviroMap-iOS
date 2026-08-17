@@ -394,6 +394,7 @@ enum PhotoTexturedMeshBuilder {
         }
 
         if !allIdx.isEmpty {
+            fillSmallHoles(pos: &allPos, nrm: &allNrm, col: &allCol, idx: &allIdx)
             smoothMesh(pos: &allPos, nrm: &allNrm, col: &allCol, idx: allIdx)
             let geom = makeVertexColorGeometry(pos: allPos, nrm: allNrm, col: allCol, idx: allIdx)
             let mat = SCNMaterial()
@@ -767,10 +768,11 @@ enum PhotoTexturedMeshBuilder {
 
 
 
-    /// Fill only small black gaps (under ~25cm). Never adds fake walls.
+    /// Fill small holes only (O(n) loop walk). Never invents walls or cuts the Tesla.
     private static func fillSmallHoles(pos: inout [Float], nrm: inout [Float], col: inout [Float], idx: inout [UInt32]) {
-        let vCount = pos.count / 3
-        guard vCount > 8, idx.count >= 6 else { return }
+        let vCount0 = pos.count / 3
+        guard vCount0 > 8, idx.count >= 6, vCount0 < 900_000 else { return }
+
         var edgeCount: [UInt64: Int] = [:]
         func ek(_ a: UInt32, _ b: UInt32) -> UInt64 {
             let lo = UInt64(min(a, b)), hi = UInt64(max(a, b))
@@ -780,41 +782,92 @@ enum PhotoTexturedMeshBuilder {
         while t + 2 < idx.count {
             let a = idx[t], b = idx[t + 1], c = idx[t + 2]
             t += 3
+            if a == b || b == c || c == a { continue }
             edgeCount[ek(a, b), default: 0] += 1
             edgeCount[ek(b, c), default: 0] += 1
             edgeCount[ek(c, a), default: 0] += 1
         }
-        var adj: [UInt32: [UInt32]] = [:]
+
+        var next: [UInt32: UInt32] = [:]
+        var deg: [UInt32: Int] = [:]
         for (k, n) in edgeCount where n == 1 {
             let a = UInt32(k >> 32), b = UInt32(k & 0xFFFF_FFFF)
-            adj[a, default: []].append(b)
-            adj[b, default: []].append(a)
+            if next[a] == nil { next[a] = b } else if next[b] == nil { next[b] = a }
+            deg[a, default: 0] += 1
+            deg[b, default: 0] += 1
         }
-        func P(_ i: UInt32) -> SIMD3<Float> {
-            let i = Int(i)
-            return SIMD3(pos[i*3], pos[i*3+1], pos[i*3+2])
+
+        func P(_ i: Int) -> SIMD3<Float> {
+            SIMD3(pos[i*3], pos[i*3+1], pos[i*3+2])
         }
-        var added = 0
-        let maxAdd = 1800
-        for (a, ns) in adj {
-            guard added < maxAdd else { break }
-            for b in ns {
-                if a >= b { continue }
-                let pa = P(a), pb = P(b)
-                if simd_length(pb - pa) > 0.28 { continue }
-                var best: UInt32?
-                var bestD: Float = 0.26
-                for (c, _) in adj {
-                    if c == a || c == b { continue }
-                    let pc = P(c)
-                    let d = max(simd_length(pc - pa), simd_length(pc - pb))
-                    if d < bestD { bestD = d; best = c }
+
+        var seen = Set<UInt32>()
+        var loops = 0
+        let maxLoops = 280
+        for start in next.keys {
+            if loops >= maxLoops { break }
+            if seen.contains(start) { continue }
+            var loop: [UInt32] = [start]
+            seen.insert(start)
+            var cur = start
+            var ok = false
+            for _ in 0..<14 {
+                guard let nxt = next[cur], !seen.contains(nxt) else {
+                    if let nxt = next[cur], nxt == start { ok = loop.count >= 3 }
+                    break
                 }
-                guard let c = best else { continue }
-                if edgeCount[ek(a, b), default: 0] != 1 { continue }
-                idx.append(contentsOf: [a, b, c])
-                added += 1
+                loop.append(nxt)
+                seen.insert(nxt)
+                cur = nxt
+                if next[cur] == start { ok = loop.count >= 3; break }
             }
+            guard ok, loop.count >= 3, loop.count <= 10 else { continue }
+
+            var perim: Float = 0
+            var maxE: Float = 0
+            var csum = SIMD3<Float>(0, 0, 0)
+            var nsum = SIMD3<Float>(0, 0, 0)
+            var colsum = SIMD4<Float>(0, 0, 0, 0)
+            for i in 0..<loop.count {
+                let ia = Int(loop[i]), ib = Int(loop[(i + 1) % loop.count])
+                guard ia < vCount0, ib < vCount0 else { ok = false; break }
+                let d = simd_length(P(ib) - P(ia))
+                perim += d
+                if d > maxE { maxE = d }
+                csum += P(ia)
+                nsum += SIMD3(nrm[ia*3], nrm[ia*3+1], nrm[ia*3+2])
+                if ia * 4 + 3 < col.count {
+                    colsum += SIMD4(col[ia*4], col[ia*4+1], col[ia*4+2], col[ia*4+3])
+                }
+            }
+            // Wall pinholes only — skip car-sized voids and long glass edges
+            guard ok, perim > 0.04, perim < 1.65, maxE < 0.55 else { continue }
+
+            let inv = 1 / Float(loop.count)
+            let cen = csum * inv
+            var nn = nsum * inv
+            let nlen = simd_length(nn)
+            nn = nlen > 1e-5 ? nn / nlen : SIMD3(0, 1, 0)
+            // Must be roughly planar
+            var planeErr: Float = 0
+            for id in loop {
+                let d = abs(simd_dot(P(Int(id)) - cen, nn))
+                if d > planeErr { planeErr = d }
+            }
+            guard planeErr < 0.10 else { continue }
+
+            let avgC = colsum * inv
+            let newI = UInt32(pos.count / 3)
+            pos.append(contentsOf: [cen.x, cen.y, cen.z])
+            nrm.append(contentsOf: [nn.x, nn.y, nn.z])
+            col.append(contentsOf: [avgC.x, avgC.y, avgC.z, max(avgC.w, 1)])
+            for i in 0..<loop.count {
+                idx.append(contentsOf: [loop[i], loop[(i + 1) % loop.count], newI])
+            }
+            loops += 1
+        }
+        if loops > 0 {
+            print("[EnviroMap] hole-fill loops=\(loops)")
         }
     }
 
