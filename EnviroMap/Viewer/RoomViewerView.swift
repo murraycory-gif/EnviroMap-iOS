@@ -236,27 +236,30 @@ struct MeshSceneView: UIViewRepresentable {
             visit(mesh)
             guard found else { return }
 
-            // Ignore floating ceiling scraps so the car/room fills the screen
-            let spanY = max(maxV.y - minV.y, 0.01)
-            let yLo = minV.y
-            let yHi = minV.y + spanY * 0.70
+            // Full garage — camera stays OUTSIDE the box so you see the whole scan
             let cx = (minV.x + maxV.x) * 0.5
-            let cy = (yLo + yHi) * 0.5
+            let cy = (minV.y + maxV.y) * 0.5
             let cz = (minV.z + maxV.z) * 0.5
-            let horiz = max(maxV.x - minV.x, maxV.z - minV.z)
-            let size = max(horiz, yHi - yLo)
-            let radius = max(size * 0.5, 0.35)
-            let dist = radius * 1.55
+            let sx = max(maxV.x - minV.x, 0.4)
+            let sy = max(maxV.y - minV.y, 0.4)
+            let sz = max(maxV.z - minV.z, 0.4)
+            let radius = max(max(sx, sy), sz) * 0.5
+            let dist = radius * 2.45
 
             scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
 
             let cam = SCNNode()
             cam.name = "previewCam"
             cam.camera = SCNCamera()
-            cam.camera?.fieldOfView = 56
-            cam.camera?.zNear = 0.01
-            cam.camera?.zFar = Double(max(150, radius * 50))
-            cam.position = SCNVector3(cx + dist * 0.40, cy + dist * 0.06, cz + dist)
+            cam.camera?.fieldOfView = 62
+            cam.camera?.zNear = 0.05
+            cam.camera?.zFar = Double(max(200, radius * 80))
+            // High 3/4 corner — never spawn inside the room
+            cam.position = SCNVector3(
+                cx + dist * 0.72,
+                maxV.y + radius * 0.35,
+                cz + dist * 0.72
+            )
             cam.look(at: SCNVector3(cx, cy, cz))
             scene.rootNode.addChildNode(cam)
 
@@ -265,8 +268,8 @@ struct MeshSceneView: UIViewRepresentable {
             view.defaultCameraController.target = SCNVector3(cx, cy, cz)
             view.defaultCameraController.interactionMode = .orbitTurntable
             view.defaultCameraController.inertiaEnabled = true
-            view.defaultCameraController.maximumVerticalAngle = 85
-            view.defaultCameraController.minimumVerticalAngle = -15
+            view.defaultCameraController.maximumVerticalAngle = 89
+            view.defaultCameraController.minimumVerticalAngle = -80
             view.allowsCameraControl = true
             view.autoenablesDefaultLighting = true
             view.isPlaying = true
