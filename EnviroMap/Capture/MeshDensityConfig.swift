@@ -25,7 +25,7 @@ enum MeshDensityConfig {
 
     static var finalVertexSoftCap: Int { 3_500_000 }
     static var triangleBudget: Int { highDetail ? 1_400_000 : 800_000 }
-    static var bakeKeyframeLimit: Int { 24 }
+    static var bakeKeyframeLimit: Int { 36 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 

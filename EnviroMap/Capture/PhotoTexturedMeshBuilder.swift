@@ -25,6 +25,13 @@ enum PhotoTexturedMeshBuilder {
         /// Value-type camera (never store ARCamera — it retains ARFrames)
         let view: simd_float4x4
         let proj: simd_float4x4
+        let worldToCam: simd_float4x4
+        let fx: Float
+        let fy: Float
+        let cx: Float
+        let cy: Float
+        let imgW: Float
+        let imgH: Float
     }
 
     struct BuildResult {
@@ -265,7 +272,20 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                if let ki = chunkKf,
+                var triKf: Int? = chunkKf
+                var bestD: Float = 9
+                for (ki, kf) in kfs.enumerated() {
+                    let toCam = kf.camPos - mid
+                    let dist = simd_length(toCam)
+                    if dist < 0.1 || dist > 3.6 { continue }
+                    if dist >= bestD { continue }
+                    let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
+                    if facing < 0.28 { continue }
+                    if projectUV(world: mid, kf: kf) == nil { continue }
+                    bestD = dist
+                    triKf = ki
+                }
+                if let ki = triKf,
                    let u0 = projectUV(world: w0, kf: kfs[ki]),
                    let u1 = projectUV(world: w1, kf: kfs[ki]),
                    let u2 = projectUV(world: w2, kf: kfs[ki]) {
@@ -689,22 +709,17 @@ enum PhotoTexturedMeshBuilder {
     }
 
     private static func projectUV(world: SIMD3<Float>, kf: Keyframe) -> SIMD2<Float>? {
-        let clip = kf.proj * kf.view * SIMD4<Float>(world.x, world.y, world.z, 1)
-        guard clip.w.isFinite, abs(clip.w) > 1e-6 else { return nil }
-        let ndcX = clip.x / clip.w
-        let ndcY = clip.y / clip.w
-        guard ndcX.isFinite, ndcY.isFinite else { return nil }
-        // NDC → UIKit viewport (top-left origin), then ARKit displayTransform → image
-        let vpW = max(kf.viewport.width, 1)
-        let vpH = max(kf.viewport.height, 1)
-        let px = (ndcX * 0.5 + 0.5) * Float(vpW)
-        let py = (1 - (ndcY * 0.5 + 0.5)) * Float(vpH)
-        let vpNorm = CGPoint(x: CGFloat(px) / vpW, y: CGFloat(py) / vpH)
-        let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
-        guard imgNorm.x.isFinite, imgNorm.y.isFinite else { return nil }
-        let u = Float(imgNorm.x)
-        let v = Float(imgNorm.y)
-        guard u >= 0.01, u <= 0.99, v >= 0.01, v <= 0.99 else { return nil }
+        // Pinhole in captured-image pixels — same space as extractRGB / vertex paint.
+        // Do NOT use displayTransform (that warped AK/AR).
+        let local = kf.worldToCam * SIMD4<Float>(world.x, world.y, world.z, 1)
+        let depth = -local.z
+        guard depth > 0.08, depth < 8 else { return nil }
+        let px = kf.fx * (local.x / depth) + kf.cx
+        let py = kf.fy * (local.y / depth) + kf.cy
+        let u = px / max(kf.imgW, 1)
+        let v = py / max(kf.imgH, 1)
+        guard u.isFinite, v.isFinite else { return nil }
+        guard u >= 0.012, u <= 0.988, v >= 0.012, v <= 0.988 else { return nil }
         return SIMD2(u, v)
     }
 
@@ -1049,7 +1064,14 @@ enum PhotoTexturedMeshBuilder {
             image: UIImage(),
             meanLuma: mean,
             view: cam.viewMatrix(for: orientation),
-            proj: cam.projectionMatrix(for: orientation, viewportSize: viewport, zNear: 0.01, zFar: 80)
+            proj: cam.projectionMatrix(for: orientation, viewportSize: viewport, zNear: 0.01, zFar: 80),
+            worldToCam: cam.transform.inverse,
+            fx: cam.intrinsics.columns.0.x,
+            fy: cam.intrinsics.columns.1.y,
+            cx: cam.intrinsics.columns.2.x,
+            cy: cam.intrinsics.columns.2.y,
+            imgW: Float(CVPixelBufferGetWidth(frame.capturedImage)),
+            imgH: Float(CVPixelBufferGetHeight(frame.capturedImage))
         )
     }
 
