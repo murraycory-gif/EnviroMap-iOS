@@ -394,7 +394,6 @@ enum PhotoTexturedMeshBuilder {
         }
 
         if !allIdx.isEmpty {
-            fillSmallHoles(pos: &allPos, nrm: &allNrm, col: &allCol, idx: &allIdx)
             smoothMesh(pos: &allPos, nrm: &allNrm, col: &allCol, idx: allIdx)
             let geom = makeVertexColorGeometry(pos: allPos, nrm: allNrm, col: allCol, idx: allIdx)
             let mat = SCNMaterial()
@@ -711,17 +710,31 @@ enum PhotoTexturedMeshBuilder {
     }
 
     private static func projectUV(world: SIMD3<Float>, kf: Keyframe) -> SIMD2<Float>? {
-        // Pinhole in captured-image pixels — same space as extractRGB / vertex paint.
-        // Do NOT use displayTransform (that warped AK/AR).
+        // 1) Pinhole in captured-image pixels
         let local = kf.worldToCam * SIMD4<Float>(world.x, world.y, world.z, 1)
         let depth = -local.z
-        guard depth > 0.08, depth < 8 else { return nil }
-        let px = kf.fx * (local.x / depth) + kf.cx
-        let py = kf.fy * (local.y / depth) + kf.cy
-        let u = px / max(kf.imgW, 1)
-        let v = py / max(kf.imgH, 1)
-        guard u.isFinite, v.isFinite else { return nil }
-        guard u >= 0.012, u <= 0.988, v >= 0.012, v <= 0.988 else { return nil }
+        if depth > 0.08, depth < 8, kf.imgW > 1, kf.imgH > 1 {
+            let u = (kf.fx * (local.x / depth) + kf.cx) / kf.imgW
+            let v = (kf.fy * (local.y / depth) + kf.cy) / kf.imgH
+            if u.isFinite, v.isFinite, u >= 0.012, u <= 0.988, v >= 0.012, v <= 0.988 {
+                return SIMD2(u, v)
+            }
+        }
+        // 2) Screen projection fallback (this is what painted the Tesla blue)
+        let clip = kf.proj * kf.view * SIMD4<Float>(world.x, world.y, world.z, 1)
+        guard clip.w.isFinite, abs(clip.w) > 1e-6 else { return nil }
+        let ndcX = clip.x / clip.w
+        let ndcY = clip.y / clip.w
+        guard ndcX.isFinite, ndcY.isFinite else { return nil }
+        let vpW = max(kf.viewport.width, 1)
+        let vpH = max(kf.viewport.height, 1)
+        let px = (ndcX * 0.5 + 0.5) * Float(vpW)
+        let py = (1 - (ndcY * 0.5 + 0.5)) * Float(vpH)
+        let vpNorm = CGPoint(x: CGFloat(px) / vpW, y: CGFloat(py) / vpH)
+        let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
+        let u = Float(imgNorm.x)
+        let v = Float(imgNorm.y)
+        guard u.isFinite, v.isFinite, u >= 0.012, u <= 0.988, v >= 0.012, v <= 0.988 else { return nil }
         return SIMD2(u, v)
     }
 
