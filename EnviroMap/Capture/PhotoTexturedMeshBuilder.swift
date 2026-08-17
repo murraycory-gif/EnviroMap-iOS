@@ -204,7 +204,7 @@ enum PhotoTexturedMeshBuilder {
                         let n = worldN(vi)
                         let toCam = kf.camPos - w
                         let dist = simd_length(toCam)
-                        if dist < 0.08 || dist > 3.2 { continue } // close only
+                        if dist < 0.08 || dist > 4.2 { continue } // one photo per tile, not the whole room
                         let facing = abs(simd_dot(n, toCam / max(dist, 1e-4)))
                         if facing < 0.35 { continue }
                         guard let uv = projectUV(world: w, kf: kf) else { continue }
@@ -218,7 +218,8 @@ enum PhotoTexturedMeshBuilder {
                     // A small tile must not use a photo of the whole room
                     if uvSpan > 0.72 { continue }
                     let avgD = distSum / Float(hits)
-                    let score = Float(hits) / max(avgD * avgD, 0.12) / max(uvSpan, 0.04)
+                    let sharp = Float(max(kf.rgbWidth, 320)) / 640
+                    let score = Float(hits) * sharp / max(avgD * avgD, 0.12) / max(uvSpan, 0.04)
                     if score > bestScore {
                         bestScore = score
                         chunkKf = ki
@@ -272,20 +273,24 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
+                // Photogrammetry-style: ONE photo for the whole tile.
+                // Per-triangle switching is what painted pink/white squares on the Tesla.
                 var triKf: Int? = chunkKf
-                var bestScore: Float = -1
-                for (ki, kf) in kfs.enumerated() {
-                    let toCam = kf.camPos - mid
-                    let dist = simd_length(toCam)
-                    if dist < 0.1 || dist > 5.0 { continue }
-                    let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
-                    if facing < 0.32 { continue }
-                    if projectUV(world: mid, kf: kf) == nil { continue }
-                    let sharp = Float(max(kf.rgbWidth, 320)) / 640
-                    let score = facing * sharp / max(dist, 0.35)
-                    if score > bestScore {
-                        bestScore = score
-                        triKf = ki
+                if triKf == nil || projectUV(world: mid, kf: kfs[triKf!]) == nil {
+                    var bestScore: Float = -1
+                    for (ki, kf) in kfs.enumerated() {
+                        let toCam = kf.camPos - mid
+                        let dist = simd_length(toCam)
+                        if dist < 0.1 || dist > 4.2 { continue }
+                        let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
+                        if facing < 0.32 { continue }
+                        if projectUV(world: mid, kf: kf) == nil { continue }
+                        let sharp = Float(max(kf.rgbWidth, 320)) / 640
+                        let score = facing * sharp / max(dist, 0.35)
+                        if score > bestScore {
+                            bestScore = score
+                            triKf = ki
+                        }
                     }
                 }
                 if let ki = triKf,
