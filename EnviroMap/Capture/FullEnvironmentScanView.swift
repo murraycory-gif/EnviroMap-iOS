@@ -925,11 +925,21 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 fresh[chunk.id] = chunk
             }
         }
-        // Finish tiles are the latest ARKit mesh — never keep a stale live copy
+        // Planes = real walls / floor / ceiling ARKit locked (Polycam + RoomPlan do this)
+        var planeChunks: [UUID: CapturedMeshChunk] = [:]
+        for plane in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) {
+            let ext = hypot(plane.extent.x, plane.extent.z)
+            guard ext >= 0.40 else { continue }
+            if let chunk = Self.copyPlaneChunk(from: plane) {
+                planeChunks[chunk.id] = chunk
+            }
+        }
         stateLock.lock()
         for (id, chunk) in fresh { chunks[id] = chunk }
+        for (id, chunk) in planeChunks where chunks[id] == nil {
+            chunks[id] = chunk
+        }
         stateLock.unlock()
-        // One high-res color frame at Finish (not during walk — that retained ARFrames)
         ingestKeyframe(from: frame, highRes: true)
     }
 
@@ -1005,12 +1015,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
-        // No mesh bank on update — reading geometry mid-update caused EXC_BAD_ACCESS freezes.
-        // Coverage comes from didAdd + Finish harvest.
-        guard showBlueMesh, let mesh = anchor as? ARMeshAnchor else { return }
+        guard let mesh = anchor as? ARMeshAnchor else { return }
+        // Polycam/Scaniverse: keep refining every tile as LiDAR fills it in
+        bankMeshNow(mesh, minInterval: 0.40)
+        guard showBlueMesh else { return }
         let id = mesh.identifier
         let now = CACurrentMediaTime()
-        if let last = lastVizTime[id], now - last < 1.5 { return }
+        if let last = lastVizTime[id], now - last < 0.8 { return }
         lastVizTime[id] = now
         applyBlueWire(node: node, mesh: mesh)
     }
@@ -1046,7 +1057,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     /// Read AI prefs each session
     private var showBlueMesh: Bool {
         // Default OFF — blue wire steals CPU from LiDAR reconstruction (lag + holes)
-        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? false
+        // Default ON — like Polycam's white mesh: you see walls as they lock
+        UserDefaults.standard.object(forKey: "enviromap.scan.showBlueMesh") as? Bool ?? true
     }
     private var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
@@ -1487,7 +1499,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
         positions.reserveCapacity(vCount)
-        let nrm = SIMD3<Float>(0, 1, 0)
+        let nrm = SIMD3<Float>(0, 1, 0) // local +Y is the plane normal
         for i in 0..<vCount {
             let v = g.vertices[i]
             positions.append(SIMD3(v.x, v.y, v.z))
