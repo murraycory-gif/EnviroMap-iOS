@@ -225,29 +225,8 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                if let ki = bestKf(mid, nMid),
-                   let u0 = projectUV(world: w0, kf: kfs[ki]),
-                   let u1 = projectUV(world: w1, kf: kfs[ki]),
-                   let u2 = projectUV(world: w2, kf: kfs[ki]) {
-                    // Reject tiny / flipped UV tris (those washed white before)
-                    let uvArea = abs((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y))
-                    if uvArea > 1e-6 {
-                        func pushTex(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
-                            texPos[ki].append(contentsOf: [w.x, w.y, w.z])
-                            texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
-                            texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
-                            let id = texBase[ki]
-                            texBase[ki] += 1
-                            return id
-                        }
-                        let a = pushTex(w0, n0, u0)
-                        let b = pushTex(w1, n1, u1)
-                        let c = pushTex(w2, n2, u2)
-                        texIdx[ki].append(contentsOf: [a, b, c])
-                        triUsed += 1
-                        continue
-                    }
-                }
+                // Photo UV off — AK warped. Vertex color only (AJ look).
+
 
                 // Photo texture when one camera sees the whole triangle (picture-clear).
                 func bestKf(_ w: SIMD3<Float>, _ n: SIMD3<Float>) -> Int? {
