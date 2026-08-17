@@ -838,24 +838,20 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
 
         let config = ARWorldTrackingConfiguration()
-        // Dense LiDAR mesh of everything (not RoomPlan walls-only)
-        // .mesh = more geometry, less CPU than classification (we don't use labels)
         config.sceneReconstruction = .mesh
-        config.environmentTexturing = .none
+        // Automatic env texturing = more visual features → fewer "poor slam" skips
+        config.environmentTexturing = .automatic
         config.planeDetection = [.horizontal, .vertical]
+        config.isAutoFocusEnabled = true
         config.isLightEstimationEnabled = false
         config.providesAudioData = false
-        // Better outdoor/indoor auto exposure when device supports it
-        if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
-            config.frameSemantics.insert(.sceneDepth)
+        // 30 fps gives SLAM time to integrate mesh (60 fps was starving it)
+        if let fmt = ARWorldTrackingConfiguration.supportedVideoFormats.first(where: {
+            $0.framesPerSecond == 30
+        }) {
+            config.videoFormat = fmt
         }
-        if #available(iOS 16.0, *) {
-            // Prefer smoothed depth for denser outdoor reconstruction when available
-            if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
-                // Keep raw sceneDepth only — smoothed can reduce outdoor range on some devices
-            }
-        }
-        // Smoother tracking → better mesh continuity
+        // No sceneDepth during walk — extra buffers were retaining ARFrames
 
         isRunning = true
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -1172,11 +1168,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
 
-        // Color frames — light + capped (do not retain ARFrame)
-        let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
-        if ts - lastKeyframeTime >= kfI {
+        // Tiny sync color sample only — never dispatch ARFrame off this thread
+        if ts - lastKeyframeTime >= 1.1 {
             lastKeyframeTime = ts
-            autoreleasepool { ingestKeyframe(from: frame, highRes: false) }
+            ingestTinyKeyframe(from: frame)
         }
 
         // Stats only
@@ -1340,33 +1335,29 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         stateLock.unlock()
     }
 
-    private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
-        // NEVER decode RGB on the AR callback — that retains 12 ARFrames and kills LiDAR.
+    private func ingestTinyKeyframe(from frame: ARFrame) {
+        // 256px copy on this thread (~2ms) then drop the frame. No async retain.
         if kfBusy { return }
-        stateLock.lock()
-        let atCap = keyframes.count >= maxKeyframes
-        stateLock.unlock()
+        kfBusy = true
+        defer { kfBusy = false }
+        storeKeyframe(from: frame, maxWidth: 256)
+    }
 
+    private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
+        storeKeyframe(from: frame, maxWidth: highRes ? MeshDensityConfig.keyframeMaxWidth : 256)
+    }
+
+    private func storeKeyframe(from frame: ARFrame, maxWidth: Int) {
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
-        let width = highRes
-            ? MeshDensityConfig.keyframeMaxWidth
-            : MeshDensityConfig.liveKeyframeMaxWidth
         let snap = PhotoTexturedMeshBuilder.snapCamera(from: frame, orientation: orientation, viewport: viewport)
-        let buf = frame.capturedImage
-        kfBusy = true
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            defer { self?.kfBusy = false }
-            guard let self else { return }
-            guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(buffer: buf, snap: snap, maxWidth: width) else { return }
-            self.stateLock.lock()
-            if atCap, !self.keyframes.isEmpty { self.keyframes.removeFirst() }
-            self.keyframes.append(kf)
-            if self.keyframes.count > self.maxKeyframes {
-                self.keyframes.removeFirst(self.keyframes.count - self.maxKeyframes)
-            }
-            self.stateLock.unlock()
+        guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(buffer: frame.capturedImage, snap: snap, maxWidth: maxWidth) else { return }
+        stateLock.lock()
+        keyframes.append(kf)
+        if keyframes.count > maxKeyframes {
+            keyframes.removeFirst(keyframes.count - maxKeyframes)
         }
+        stateLock.unlock()
     }
 
 
