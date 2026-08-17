@@ -181,27 +181,41 @@ enum PhotoTexturedMeshBuilder {
                 return len > 1e-6 ? nn / len : SIMD3(0, 1, 0)
             }
 
-            // ONE photo for this whole tile (per-triangle photos shredded AK)
+            // ONE close-up photo per tile. Wide garage shots scored high before
+            // and pasted a second Tesla onto the door.
             var chunkKf: Int? = nil
             if !kfs.isEmpty, vCount > 0 {
-                var scores = Array(repeating: 0, count: kfs.count)
+                var bestScore: Float = -1
                 let sampleN = min(vCount, 20)
-                for si in 0..<sampleN {
-                    let vi = si * vCount / sampleN
-                    let w = worldP(vi)
-                    let n = worldN(vi)
-                    for (ki, kf) in kfs.enumerated() {
+                for (ki, kf) in kfs.enumerated() {
+                    var hits = 0
+                    var distSum: Float = 0
+                    var minU: Float = 1, maxU: Float = 0, minV: Float = 1, maxV: Float = 0
+                    for si in 0..<sampleN {
+                        let vi = si * vCount / sampleN
+                        let w = worldP(vi)
+                        let n = worldN(vi)
                         let toCam = kf.camPos - w
                         let dist = simd_length(toCam)
-                        if dist < 0.08 || dist > 6.5 { continue }
+                        if dist < 0.08 || dist > 3.2 { continue } // close only
                         let facing = abs(simd_dot(n, toCam / max(dist, 1e-4)))
-                        if facing < 0.30 { continue }
-                        if projectUV(world: w, kf: kf) != nil { scores[ki] += 1 }
+                        if facing < 0.35 { continue }
+                        guard let uv = projectUV(world: w, kf: kf) else { continue }
+                        hits += 1
+                        distSum += dist
+                        minU = min(minU, uv.x); maxU = max(maxU, uv.x)
+                        minV = min(minV, uv.y); maxV = max(maxV, uv.y)
                     }
-                }
-                if let best = scores.enumerated().max(by: { $0.element < $1.element }),
-                   best.element >= 4 {
-                    chunkKf = best.offset
+                    guard hits >= 5 else { continue }
+                    let uvSpan = max(maxU - minU, maxV - minV)
+                    // A small tile must not use a photo of the whole room
+                    if uvSpan > 0.42 { continue }
+                    let avgD = distSum / Float(hits)
+                    let score = Float(hits) / max(avgD * avgD, 0.12) / max(uvSpan, 0.04)
+                    if score > bestScore {
+                        bestScore = score
+                        chunkKf = ki
+                    }
                 }
             }
 
@@ -260,7 +274,7 @@ enum PhotoTexturedMeshBuilder {
                     let wMax = max(e01, max(e12, e20))
                     let uvArea = abs((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y))
                     // Skip stretched UVs (that's the AK mess)
-                    let stretchOK = wMax < 0.55 && uvArea > 2e-6 && t01 > 1e-5 && e01 > 1e-4 &&
+                    let stretchOK = wMax < 0.38 && uvArea > 2e-6 && t01 > 1e-5 && e01 > 1e-4 &&
                         abs((t01 / max(e01, 1e-4)) - (t12 / max(e12, 1e-4))) < 8
                     if stretchOK {
                         func pushTex(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
