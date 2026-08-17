@@ -797,8 +797,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         super.didReceiveMemoryWarning()
         stateLock.lock()
         // Emergency trim — keep newest half of keyframes + chunks
-        if keyframes.count > 10 {
-            keyframes = Array(keyframes.suffix(10))
+        if keyframes.count > 36 {
+            keyframes = Array(keyframes.suffix(36))
         }
         if chunks.count > 800 {
             let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
@@ -851,7 +851,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }) {
             config.videoFormat = fmt
         }
-        // No sceneDepth during walk — extra buffers were retaining ARFrames
+        // LiDAR depth on — we copy pixels immediately, never retain ARFrame
+        if ARWorldTrackingConfiguration.supportsFrameSemantics(.smoothedSceneDepth) {
+            config.frameSemantics.insert(.smoothedSceneDepth)
+        } else if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
+            config.frameSemantics.insert(.sceneDepth)
+        }
 
         isRunning = true
         arView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
@@ -979,6 +984,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         for (id, chunk) in walls where chunks[id] == nil { chunks[id] = chunk }
         stateLock.unlock()
         ingestKeyframe(from: frame, highRes: true)
+        ingestDepthPoints(from: frame, dense: true)
     }
 
     private func harvestFromFrame(_ frame: ARFrame) {
@@ -1055,7 +1061,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     func renderer(_ renderer: SCNSceneRenderer, didUpdate node: SCNNode, for anchor: ARAnchor) {
         guard let mesh = anchor as? ARMeshAnchor else { return }
         // Polycam/Scaniverse: keep refining every tile as LiDAR fills it in
-        bankMeshNow(mesh, minInterval: 0.40)
+        bankMeshNow(mesh, minInterval: 0.28)
         guard showBlueMesh else { return }
         let id = mesh.identifier
         let now = CACurrentMediaTime()
@@ -1218,6 +1224,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         if ts - lastKeyframeTime >= kfI {
             lastKeyframeTime = ts
             ingestLivePhoto(from: frame)
+        }
+        if ts - lastDepthTime >= MeshDensityConfig.depthIngestInterval {
+            lastDepthTime = ts
+            ingestDepthPoints(from: frame, dense: false)
         }
 
         // Stats only
@@ -1421,7 +1431,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
 
     private func ingestDepthPoints(from frame: ARFrame, dense: Bool = false) {
-        guard let depthMap = frame.sceneDepth?.depthMap else { return }
+        guard let depthMap = frame.smoothedSceneDepth?.depthMap ?? frame.sceneDepth?.depthMap else { return }
         let cam = frame.camera
         let orientation = arView?.window?.windowScene?.interfaceOrientation ?? .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
