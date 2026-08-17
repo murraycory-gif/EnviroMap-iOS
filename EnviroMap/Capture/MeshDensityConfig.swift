@@ -7,13 +7,14 @@ enum MeshDensityConfig {
     }
 
     static func keyframeInterval(movingFast: Bool) -> TimeInterval {
-        movingFast ? 0.11 : 0.16
+        // ~2–3 photos/sec. Faster than this retains ARFrames and kills SLAM.
+        movingFast ? 0.38 : 0.55
     }
 
     static var maxKeyframes: Int { 72 }
     static var maxChunks: Int { 12_000 }
 
-    static var liveKeyframeMaxWidth: Int { 640 }
+    static var liveKeyframeMaxWidth: Int { 480 }
     static var keyframeMaxWidth: Int { 1280 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }

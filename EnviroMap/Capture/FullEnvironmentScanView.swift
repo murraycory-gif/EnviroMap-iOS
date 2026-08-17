@@ -1168,10 +1168,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
 
-        // Tiny sync color sample only — never dispatch ARFrame off this thread
-        if ts - lastKeyframeTime >= 1.1 {
+        // Live photos: copy RGB into our memory NOW, then drop the ARFrame.
+        let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
+        if ts - lastKeyframeTime >= kfI {
             lastKeyframeTime = ts
-            ingestTinyKeyframe(from: frame)
+            ingestLivePhoto(from: frame)
         }
 
         // Stats only
@@ -1335,23 +1336,31 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         stateLock.unlock()
     }
 
-    private func ingestTinyKeyframe(from frame: ARFrame) {
-        // 256px copy on this thread (~2ms) then drop the frame. No async retain.
+    /// Live color: own the pixels immediately. Never keep CVPixelBuffer / ARFrame.
+    private func ingestLivePhoto(from frame: ARFrame) {
         if kfBusy { return }
         kfBusy = true
         defer { kfBusy = false }
-        storeKeyframe(from: frame, maxWidth: 256)
+        storeKeyframe(from: frame, maxWidth: MeshDensityConfig.liveKeyframeMaxWidth)
     }
 
     private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
-        storeKeyframe(from: frame, maxWidth: highRes ? MeshDensityConfig.keyframeMaxWidth : 256)
+        storeKeyframe(
+            from: frame,
+            maxWidth: highRes ? MeshDensityConfig.keyframeMaxWidth : MeshDensityConfig.liveKeyframeMaxWidth
+        )
     }
 
     private func storeKeyframe(from frame: ARFrame, maxWidth: Int) {
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
         let snap = PhotoTexturedMeshBuilder.snapCamera(from: frame, orientation: orientation, viewport: viewport)
-        guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(buffer: frame.capturedImage, snap: snap, maxWidth: maxWidth) else { return }
+        // extractRGBFast copies into [UInt8] before we return — frame is free after this
+        guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
+            buffer: frame.capturedImage,
+            snap: snap,
+            maxWidth: maxWidth
+        ) else { return }
         stateLock.lock()
         keyframes.append(kf)
         if keyframes.count > maxKeyframes {

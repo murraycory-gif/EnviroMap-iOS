@@ -1143,9 +1143,8 @@ enum PhotoTexturedMeshBuilder {
         maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
         let cap = min(maxWidth, MeshDensityConfig.keyframeMaxWidth)
-        let useBox = cap >= 1000
-        guard let (rgb, w, h) = extractRGB(buffer: buffer, maxWidth: cap, boxFilter: useBox) else { return nil }
-        let mean = lumaMean(rgb, width: w, height: h)
+        guard let (rgb, w, h) = extractRGBFast(buffer: buffer, maxWidth: cap) else { return nil }
+        let mean: Float = 0.5
         return Keyframe(
             orientation: snap.orientation,
             viewport: snap.viewport,
@@ -1231,6 +1230,53 @@ enum PhotoTexturedMeshBuilder {
             }
         }
         return mean
+    }
+
+
+    /// Integer-step YUV→RGB. Owns the bytes immediately so the ARFrame can be released.
+    static func extractRGBFast(buffer: CVPixelBuffer, maxWidth: Int) -> ([UInt8], Int, Int)? {
+        let fullW = CVPixelBufferGetWidth(buffer)
+        let fullH = CVPixelBufferGetHeight(buffer)
+        guard fullW > 1, fullH > 1 else { return nil }
+        let w = max(2, min(maxWidth, fullW))
+        let h = max(2, fullH * w / fullW)
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        let format = CVPixelBufferGetPixelFormatType(buffer)
+        var rgb = [UInt8](repeating: 0, count: w * h * 3)
+        if format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            || format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange {
+            guard let yBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 0),
+                  let cBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 1) else { return nil }
+            let yStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+            let cStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 1)
+            let videoRange = format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            let yPtr = yBase.assumingMemoryBound(to: UInt8.self)
+            let cPtr = cBase.assumingMemoryBound(to: UInt8.self)
+            for j in 0..<h {
+                let sy = min(j * fullH / h, fullH - 1)
+                let yRow = yPtr.advanced(by: sy * yStride)
+                let cRow = cPtr.advanced(by: (sy / 2) * cStride)
+                for i in 0..<w {
+                    let sx = min(i * fullW / w, fullW - 1)
+                    var Y = Float(yRow[sx])
+                    if videoRange { Y = (Y - 16) * (255.0 / 219.0) }
+                    let uv = (sx / 2) * 2
+                    let Cb = Float(cRow[uv]) - 128
+                    let Cr = Float(cRow[uv + 1]) - 128
+                    var r = Y + 1.402 * Cr
+                    var g = Y - 0.344136 * Cb - 0.714136 * Cr
+                    var bl = Y + 1.772 * Cb
+                    if r < 0 { r = 0 } else if r > 255 { r = 255 }
+                    if g < 0 { g = 0 } else if g > 255 { g = 255 }
+                    if bl < 0 { bl = 0 } else if bl > 255 { bl = 255 }
+                    let o = (j * w + i) * 3
+                    rgb[o] = UInt8(r); rgb[o + 1] = UInt8(g); rgb[o + 2] = UInt8(bl)
+                }
+            }
+            return (rgb, w, h)
+        }
+        return extractRGB(buffer: buffer, maxWidth: maxWidth, boxFilter: false)
     }
 
     private static func extractRGB(buffer: CVPixelBuffer, maxWidth: Int, boxFilter: Bool = false) -> ([UInt8], Int, Int)? {
