@@ -213,36 +213,9 @@ struct MeshSceneView: UIViewRepresentable {
             renderer.scene?.rootNode.enumerateChildNodes { node, _ in
                 guard let name = node.name, name.hasPrefix("photoWall") else { return }
                 let c = SIMD3<Float>(node.simdWorldPosition)
-                var n = SIMD3<Float>(0, 1, 0)
-                if let stored = node.value(forKey: "wallN") as? [Float], stored.count == 3 {
-                    n = simd_normalize(SIMD3(stored[0], stored[1], stored[2]))
-                }
-                let toWall = c - camPos
-                let dist = simd_length(toWall)
-                guard dist > 1e-4 else {
-                    node.isHidden = true
-                    return
-                }
-                let dir = toWall / dist
-                let ahead = simd_dot(dir, lookDir)
-                let facing = simd_dot(n, simd_normalize(camPos - c))
-                // Inspecting this wall (turned toward it, not sitting inside it)
-                let inspecting = ahead > 0.62 && facing > 0.18 && dist > 0.7 && dist < 8
-                if inspecting {
-                    node.isHidden = false
-                    return
-                }
-                // Drop walls that sit between you and the car, or behind you, or too close
-                var hide = ahead < 0.12 || facing < 0.05 || dist < 0.65
-                let toTarget = lookTarget - camPos
-                let tLen = simd_length(toTarget)
-                if tLen > 0.3 {
-                    let tHit = simd_dot(c - camPos, toTarget / tLen)
-                    if tHit > 0.25 && tHit < tLen - 0.2 && dist < tLen {
-                        hide = true
-                    }
-                }
-                node.isHidden = hide
+                let dist = simd_length(c - camPos)
+                // Only hide a wall if the camera is sitting inside it
+                node.isHidden = dist < 0.70
             }
         }
 

@@ -974,6 +974,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 walls[clipped.id] = clipped
             }
         }
+        // Always close the room — back wall / sides / ceiling from the FULL walk, not just the Tesla
+        let roomBounds = Self.walkBounds(mesh: Array(fresh.values), planes: Array(planeBank.values), cameras: keyframes.map { $0.camPos })
+        for shell in Self.makeRoomShell(bounds: roomBounds, occ: occ) {
+            walls[shell.id] = shell
+        }
+            walls[shell.id] = shell
+        }
         print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count) occ=\(occ.count)")
 
         stateLock.lock()
@@ -1672,20 +1679,54 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         )
     }
 
-    /// 4 walls from the scan bounding box when ARKit didn't lock enough planes.
-    private static func makeRoomShell(from chunks: [CapturedMeshChunk], occ: Set<Int64>) -> [CapturedMeshChunk] {
+    /// Room size from the walk + walls, not just the Tesla mesh.
+    private static func walkBounds(
+        mesh: [CapturedMeshChunk],
+        planes: [(t: simd_float4x4, w: Float, h: Float, align: ARPlaneAnchor.Alignment, origin: SIMD3<Float>, center: SIMD3<Float>)],
+        cameras: [SIMD3<Float>]
+    ) -> (SIMD3<Float>, SIMD3<Float>) {
         var minP = SIMD3<Float>(repeating: 1e9)
         var maxP = SIMD3<Float>(repeating: -1e9)
-        for chunk in chunks {
+        func absorb(_ p: SIMD3<Float>) {
+            minP = simd_min(minP, p)
+            maxP = simd_max(maxP, p)
+        }
+        for chunk in mesh {
             let t = chunk.transform
             for p in chunk.positions {
                 let w = t * SIMD4<Float>(p.x, p.y, p.z, 1)
-                minP = simd_min(minP, SIMD3(w.x, w.y, w.z))
-                maxP = simd_max(maxP, SIMD3(w.x, w.y, w.z))
+                absorb(SIMD3(w.x, w.y, w.z))
             }
         }
+        for pl in planes {
+            absorb(pl.origin)
+            let half = max(pl.w, pl.h) * 0.5
+            absorb(pl.origin + SIMD3(half, 0, 0))
+            absorb(pl.origin - SIMD3(half, 0, 0))
+            absorb(pl.origin + SIMD3(0, 0, half))
+            absorb(pl.origin - SIMD3(0, 0, half))
+            absorb(pl.origin + SIMD3(0, max(pl.h, 1.2) * 0.5, 0))
+        }
+        for c in cameras {
+            absorb(c)
+            // Space you walked + 1.6m outward is still the room
+            absorb(c + SIMD3(1.6, 0, 1.6))
+            absorb(c + SIMD3(-1.6, 0, -1.6))
+            absorb(c + SIMD3(1.6, 0, -1.6))
+            absorb(c + SIMD3(-1.6, 0, 1.6))
+        }
+        if minP.x > maxP.x { return (SIMD3(-2, 0, -2), SIMD3(2, 2.4, 2)) }
+        // Floor to a real ceiling
+        if maxP.y - minP.y < 2.0 { maxP.y = minP.y + 2.4 }
+        return (minP, maxP)
+    }
+
+    /// 4 walls + ceiling from the walk bounding box.
+    private static func makeRoomShell(bounds: (SIMD3<Float>, SIMD3<Float>), occ: Set<Int64>) -> [CapturedMeshChunk] {
+        let minP = bounds.0
+        let maxP = bounds.1
         let size = maxP - minP
-        guard size.x > 1.4, size.z > 1.4, size.y > 1.0 else { return [] }
+        guard size.x > 1.2, size.z > 1.2, size.y > 0.8 else { return [] }
         let y0 = minP.y + 0.04
         let y1 = maxP.y
         let faces: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float, Float)] = [
@@ -1693,6 +1734,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             (SIMD3(maxP.x, y0, minP.z), SIMD3(0, 0, 1), SIMD3(0, 1, 0), size.z, y1 - y0),
             (SIMD3(minP.x, y0, minP.z), SIMD3(1, 0, 0), SIMD3(0, 1, 0), size.x, y1 - y0),
             (SIMD3(minP.x, y0, maxP.z), SIMD3(1, 0, 0), SIMD3(0, 1, 0), size.x, y1 - y0),
+            (SIMD3(minP.x, y1, minP.z), SIMD3(1, 0, 0), SIMD3(0, 0, 1), size.x, size.z),
         ]
         var out: [CapturedMeshChunk] = []
         let step: Float = 0.30

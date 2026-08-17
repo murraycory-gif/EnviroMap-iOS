@@ -343,10 +343,7 @@ enum PhotoTexturedMeshBuilder {
                     }
                 }
 
-                // Walls never become gray vertex-color slabs — skip if no photo
-                if chunk.isBackdrop { continue }
-
-                // Vertex color path
+                // Vertex color path (walls included — never leave a black hole)
                 func emit(_ i: Int) -> UInt32 {
                     if let e = remap[i] { return e }
                     let w = worldP(i)
