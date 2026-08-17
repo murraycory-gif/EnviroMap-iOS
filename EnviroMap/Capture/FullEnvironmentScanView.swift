@@ -935,8 +935,16 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         var walls: [UUID: CapturedMeshChunk] = [:]
         for plane in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) {
-            let ext = hypot(plane.extent.x, plane.extent.z)
-            guard ext >= 0.70 else { continue }
+            let w: Float
+            let h: Float
+            if #available(iOS 16.0, *) {
+                w = plane.planeExtent.width
+                h = plane.planeExtent.height
+            } else {
+                w = plane.extent.x
+                h = plane.extent.z
+            }
+            guard max(w, h) >= 0.50 else { continue }
             let origin = SIMD3<Float>(plane.transform.columns.3.x, plane.transform.columns.3.y, plane.transform.columns.3.z)
             let isWall = plane.alignment == .vertical
             let isCeil = plane.alignment == .horizontal && origin.y > 1.7
@@ -1509,63 +1517,52 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
 
 
-    /// Vertical wall / high ceiling, split small so photos paint (not white slabs).
+    /// Full wall/ceiling rectangle from ARKit extent (not the scrap polygon).
     private static func copyPlaneChunk(from plane: ARPlaneAnchor) -> CapturedMeshChunk? {
-        let g = plane.geometry
-        let vCount = g.vertices.count
-        let iCount = g.triangleIndices.count
-        guard vCount > 2, iCount >= 3 else { return nil }
+        let width: Float
+        let height: Float
+        if #available(iOS 16.0, *) {
+            width = plane.planeExtent.width
+            height = plane.planeExtent.height
+        } else {
+            width = plane.extent.x
+            height = plane.extent.z
+        }
+        guard width >= 0.40, height >= 0.40 else { return nil }
+
+        let cx = plane.center.x
+        let cz = plane.center.z
+        let step: Float = 0.28
+        let nx = min(48, max(1, Int(ceil(width / step))))
+        let nz = min(48, max(1, Int(ceil(height / step))))
+        let nrm = SIMD3<Float>(0, 1, 0)
 
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
-        let nrm = SIMD3<Float>(0, 1, 0)
-        positions.reserveCapacity(max(vCount * 4, 16))
-        for i in 0..<vCount {
-            let v = g.vertices[i]
-            positions.append(SIMD3(v.x, v.y, v.z))
-            normals.append(nrm)
+        positions.reserveCapacity((nx + 1) * (nz + 1))
+        normals.reserveCapacity((nx + 1) * (nz + 1))
+        for iz in 0...nz {
+            let v = Float(iz) / Float(nz)
+            for ix in 0...nx {
+                let u = Float(ix) / Float(nx)
+                let x = cx + (u - 0.5) * width
+                let z = cz + (v - 0.5) * height
+                positions.append(SIMD3(x, 0, z))
+                normals.append(nrm)
+            }
         }
         var indices: [UInt32] = []
-        indices.reserveCapacity(max(iCount * 4, 16))
-        for i in 0..<iCount { indices.append(UInt32(g.triangleIndices[i])) }
-
-        func splitOnce() -> Bool {
-            var did = false
-            var out: [UInt32] = []
-            out.reserveCapacity(indices.count * 2)
-            var t = 0
-            while t + 2 < indices.count {
-                let a = Int(indices[t]), b = Int(indices[t + 1]), c = Int(indices[t + 2])
-                t += 3
-                guard a < positions.count, b < positions.count, c < positions.count else { continue }
-                let pa = positions[a], pb = positions[b], pc = positions[c]
-                let ab = simd_length(pb - pa), bc = simd_length(pc - pb), ca = simd_length(pa - pc)
-                let longest = max(ab, max(bc, ca))
-                if longest < 0.32 || positions.count > 12_000 {
-                    out.append(contentsOf: [UInt32(a), UInt32(b), UInt32(c)])
-                    continue
-                }
-                did = true
-                let mid: SIMD3<Float>
-                let i0: Int, i1: Int, i2: Int
-                if ab >= bc && ab >= ca {
-                    mid = (pa + pb) * 0.5; i0 = a; i1 = b; i2 = c
-                } else if bc >= ca {
-                    mid = (pb + pc) * 0.5; i0 = b; i1 = c; i2 = a
-                } else {
-                    mid = (pc + pa) * 0.5; i0 = c; i1 = a; i2 = b
-                }
-                let mi = positions.count
-                positions.append(mid)
-                normals.append(nrm)
-                out.append(contentsOf: [UInt32(i0), UInt32(mi), UInt32(i2), UInt32(mi), UInt32(i1), UInt32(i2)])
+        indices.reserveCapacity(nx * nz * 6)
+        let stride = nx + 1
+        for iz in 0..<nz {
+            for ix in 0..<nx {
+                let a = UInt32(iz * stride + ix)
+                let b = a + 1
+                let c = a + UInt32(stride)
+                let d = c + 1
+                indices.append(contentsOf: [a, c, b, b, c, d])
             }
-            indices = out
-            return did
         }
-        var passes = 0
-        while passes < 6, splitOnce() { passes += 1 }
-
         guard indices.count >= 3 else { return nil }
         return CapturedMeshChunk(
             id: plane.identifier,
