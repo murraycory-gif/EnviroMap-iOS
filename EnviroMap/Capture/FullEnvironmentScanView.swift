@@ -920,10 +920,17 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
         let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-        print("[EnviroMap] harvest: anchors=\(frame.anchors.count) meshes=\(meshes.count)")
+        let planes = frame.anchors.compactMap { $0 as? ARPlaneAnchor }
+        print("[EnviroMap] harvest: anchors=\(frame.anchors.count) meshes=\(meshes.count) planes=\(planes.count)")
         var fresh: [UUID: CapturedMeshChunk] = [:]
         for mesh in meshes {
             if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
+                fresh[chunk.id] = chunk
+            }
+        }
+        // Walls / floor ARKit detected — fills the big black back-wall holes
+        for plane in planes {
+            if let chunk = Self.copyPlaneChunk(from: plane) {
                 fresh[chunk.id] = chunk
             }
         }
@@ -1002,6 +1009,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+        if let plane = anchor as? ARPlaneAnchor {
+            if let chunk = Self.copyPlaneChunk(from: plane) {
+                stateLock.lock()
+                chunks[chunk.id] = chunk
+                stateLock.unlock()
+            }
+            return
+        }
         guard let mesh = anchor as? ARMeshAnchor else { return }
         // New tiles only — cheap bank, keeps coverage without lag
         bankMeshNow(mesh, minInterval: 0.0)
@@ -1494,6 +1509,38 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         stateLock.unlock()
     }
 
+
+
+    /// Wall / floor plane → mesh (fills large black holes LiDAR skipped).
+    private static func copyPlaneChunk(from plane: ARPlaneAnchor) -> CapturedMeshChunk? {
+        let g = plane.geometry
+        let vCount = g.vertices.count
+        let iCount = g.triangleIndices.count
+        guard vCount > 2, iCount >= 3 else { return nil }
+
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        positions.reserveCapacity(vCount)
+        let nrm = SIMD3<Float>(0, 1, 0)
+        for i in 0..<vCount {
+            let v = g.vertices[i]
+            positions.append(SIMD3(v.x, v.y, v.z))
+            normals.append(nrm)
+        }
+        var indices: [UInt32] = []
+        indices.reserveCapacity(iCount)
+        for i in 0..<iCount {
+            indices.append(UInt32(g.triangleIndices[i]))
+        }
+        guard indices.count >= 3 else { return nil }
+        return CapturedMeshChunk(
+            id: plane.identifier,
+            transform: plane.transform,
+            positions: positions,
+            normals: normals,
+            indices: indices
+        )
+    }
 
     private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false, liveBank: Bool = false) -> CapturedMeshChunk? {
         let geom = anchor.geometry
