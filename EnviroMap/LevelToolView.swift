@@ -2,201 +2,86 @@ import SwiftUI
 import CoreMotion
 import UIKit
 
-/// Full-screen modern level — no system nav bar.
-/// HUD dead-center; data as clean floating glass.
+/// Level — same light blue Home theme. Real top bar so Back is tappable.
 struct LevelToolView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var motion = LevelMotion()
 
     var body: some View {
-        GeometryReader { geo in
-            let isLandscape = geo.size.width > geo.size.height
+        ZStack {
+            background.ignoresSafeArea()
 
-            ZStack {
-                background.ignoresSafeArea()
+            VStack(spacing: 0) {
+                topBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 10)
 
-                // Centered HUD (true screen center)
-                levelHUD(diameter: hudDiameter(size: geo.size, landscape: isLandscape))
-                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                Spacer(minLength: 8)
 
-                // Floating chrome
-                if isLandscape {
-                    landscapeChrome(size: geo.size, safe: geo.safeAreaInsets)
-                } else {
-                    portraitChrome(size: geo.size, safe: geo.safeAreaInsets)
+                levelHUD(diameter: 280)
+                    .frame(maxWidth: .infinity)
+
+                Spacer(minLength: 8)
+
+                VStack(spacing: 12) {
+                    Text(String(format: "%.0f°", motion.primaryDeg))
+                        .font(.system(size: 56, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.text)
+                        .contentTransition(.numericText())
+
+                    Text(motion.isLevel ? "Level" : motion.hint)
+                        .font(.subheadline.weight(.bold))
+                        .tracking(0.6)
+                        .foregroundStyle(motion.isLevel ? levelGreen : AppTheme.textSecondary)
+
+                    HStack(spacing: 10) {
+                        metricCard(motion.axisAName, motion.axisADeg)
+                        metricCard(motion.axisBName, motion.axisBDeg)
+                    }
+                    .padding(.horizontal, 20)
+
+                    Text(motion.instruction)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                        .padding(.bottom, 8)
                 }
-
-                // Back — top left only (no grey bar)
-                backButton
-                    .position(
-                        x: max(geo.safeAreaInsets.leading, 16) + 28,
-                        y: max(geo.safeAreaInsets.top, 16) + 28
-                    )
+                .padding(.bottom, 16)
             }
         }
-        .ignoresSafeArea()
+        .navigationBarBackButtonHidden(true)
         .navigationBarHidden(true)
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .preferredColorScheme(.dark)
-        .statusBarHidden(false)
+        .preferredColorScheme(.light)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
     }
 
-    private func hudDiameter(size: CGSize, landscape: Bool) -> CGFloat {
-        if landscape {
-            return min(size.height * 0.72, size.width * 0.40, 300)
-        }
-        return min(size.width * 0.78, size.height * 0.42, 300)
-    }
-
-    // MARK: - Back
-
-    private var backButton: some View {
-        Button {
-            dismiss()
-        } label: {
-            Image(systemName: "chevron.left")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 46, height: 46)
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.14), lineWidth: 1))
-                .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back")
-        // Keep full hit target clear of screen edge / Dynamic Island
-        .padding(4)
-    }
-
-    // MARK: - Portrait chrome (around center HUD)
-
-    private func portraitChrome(size: CGSize, safe: EdgeInsets) -> some View {
-        VStack(spacing: 0) {
-            // Top: modes centered under safe area
-            modeChips
-                .padding(.top, safe.top + 64)
-
-            Spacer()
-
-            // Bottom stack under HUD
-            VStack(spacing: 14) {
-                Text(String(format: "%.0f°", motion.primaryDeg))
-                    .font(.system(size: 56, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(levelColor)
-                    .contentTransition(.numericText())
-
-                Text(motion.isLevel ? "Level" : motion.hint)
-                    .font(.subheadline.weight(.bold))
-                    .tracking(1.0)
-                    .foregroundStyle(motion.isLevel ? levelColor : .white.opacity(0.65))
-
-                HStack(spacing: 10) {
-                    metricCard(motion.axisAName, motion.axisADeg)
-                    metricCard(motion.axisBName, motion.axisBDeg)
-                }
-                .padding(.horizontal, 24)
-
-                Text(motion.instruction)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 32)
-            }
-            .padding(.bottom, max(safe.bottom, 16) + 20)
-        }
-        .frame(width: size.width, height: size.height)
-    }
-
-    // MARK: - Landscape chrome
-
-    private func landscapeChrome(size: CGSize, safe: EdgeInsets) -> some View {
-        // Keep left metrics in upper band so they never cover bottom tip
-        let tipBand: CGFloat = 56
-        let topInset = max(safe.top, 8) + 8
-        let bottomInset = max(safe.bottom, 8) + tipBand
-
-        return ZStack {
-            // Top center: Align On Its Side / Level
-            VStack {
-                Text(motion.isLevel ? "Level" : motion.hint)
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "chevron.left")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(motion.isLevel ? levelColor : .white.opacity(0.85))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .padding(.top, topInset)
-                Spacer()
+                    .foregroundStyle(AppTheme.blue)
+                    .frame(width: 44, height: 44)
+                    .background(AppTheme.blueSoft, in: Circle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back")
 
-            // Left: degree + cards — top-aligned, capped above tip
-            VStack {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(String(format: "%.0f°", motion.primaryDeg))
-                            .font(.system(size: 56, weight: .bold, design: .rounded))
-                            .monospacedDigit()
-                            .foregroundStyle(levelColor)
-                            .contentTransition(.numericText())
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.65)
-
-                        VStack(spacing: 8) {
-                            metricCard(motion.axisAName, motion.axisADeg)
-                            metricCard(motion.axisBName, motion.axisBDeg)
-                        }
-                        .frame(width: 180)
-                    }
-                    .padding(.leading, max(safe.leading, 16) + 56)
-                    .padding(.top, topInset + 34)
-
-                    Spacer(minLength: 0)
-                }
-                Spacer(minLength: bottomInset)
-            }
-
-            // Right chips — above tip band
-            HStack {
-                Spacer()
-                modeChipsVertical
-                    .padding(.trailing, max(safe.trailing, 16) + 8)
-            }
-            .padding(.bottom, bottomInset * 0.35)
-
-            // Bottom tip strip only
-            VStack {
-                Spacer()
-                Text(motion.instruction)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
-                    .frame(maxWidth: size.width * 0.75)
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, max(safe.bottom, 8) + 10)
-            }
-        }
-        .frame(width: size.width, height: size.height)
-    }
-
-    /// Flat / Upright / Side stacked down the right edge
-    private var modeChipsVertical: some View {
-        VStack(spacing: 10) {
-            modeChip(.flat, icon: "rectangle.landscape.rotate")
-            modeChip(.upright, icon: "iphone")
-            modeChip(.side, icon: "iphone.landscape")
+            modeChips
+                .frame(maxWidth: .infinity)
         }
     }
 
-    // MARK: - Pieces
-
-    private var levelColor: Color {
-        motion.isLevel ? Color(red: 0.2, green: 0.9, blue: 0.6) : .white
+    private var levelGreen: Color {
+        Color(red: 0.10, green: 0.62, blue: 0.42)
     }
 
     private var modeChips: some View {
@@ -209,64 +94,59 @@ struct LevelToolView: View {
 
     private func modeChip(_ mode: LevelMotion.Mode, icon: String) -> some View {
         let on = motion.mode == mode
-        return HStack(spacing: 6) {
+        return HStack(spacing: 4) {
             Image(systemName: icon)
-                .font(.caption.weight(.bold))
-                .frame(width: 16)
+                .font(.caption2.weight(.bold))
             Text(mode.label)
                 .font(.caption.weight(.bold))
-            Spacer(minLength: 0)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .foregroundStyle(on ? .white : .white.opacity(0.55))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
-        .frame(width: 118, alignment: .leading)
+        .foregroundStyle(on ? Color.white : AppTheme.blue)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
         .background {
-            if on {
-                Capsule().fill(AppTheme.blue)
-            } else {
-                Capsule().fill(.ultraThinMaterial)
-            }
+            Capsule().fill(on ? AppTheme.blue : AppTheme.card)
         }
         .overlay(
-            Capsule().stroke(Color.white.opacity(on ? 0 : 0.1), lineWidth: 1)
+            Capsule().stroke(on ? Color.clear : AppTheme.cardBorder, lineWidth: 1)
         )
+        .shadow(color: on ? AppTheme.blue.opacity(0.25) : .clear, radius: 6, y: 2)
     }
 
     private func metricCard(_ title: String, _ value: Double) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(AppTheme.textSecondary)
             Text(String(format: "%+.1f°", value))
                 .font(.title3.weight(.bold).monospacedDigit())
-                .foregroundStyle(.white)
+                .foregroundStyle(AppTheme.text)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(AppTheme.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(AppTheme.cardBorder, lineWidth: 1)
         )
+        .shadow(color: AppTheme.blue.opacity(0.06), radius: 8, y: 3)
     }
 
     private func levelHUD(diameter: CGFloat) -> some View {
         let scale = diameter / 280
         return ZStack {
-            // Soft plate behind ring
             Circle()
-                .fill(Color.white.opacity(0.03))
+                .fill(Color.white)
                 .frame(width: diameter, height: diameter)
+                .shadow(color: AppTheme.blue.opacity(0.12), radius: 20, y: 8)
 
             Circle()
                 .stroke(
                     LinearGradient(
-                        colors: [
-                            AppTheme.blue.opacity(0.95),
-                            Color(red: 0.35, green: 0.75, blue: 1.0).opacity(0.45),
-                        ],
+                        colors: [AppTheme.blue, Color(red: 0.35, green: 0.65, blue: 1.0)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
@@ -276,14 +156,14 @@ struct LevelToolView: View {
 
             ForEach(0..<12, id: \.self) { i in
                 Capsule()
-                    .fill(Color.white.opacity(i % 3 == 0 ? 0.45 : 0.16))
+                    .fill(AppTheme.blue.opacity(i % 3 == 0 ? 0.45 : 0.18))
                     .frame(width: (i % 3 == 0 ? 3 : 1.5) * scale, height: (i % 3 == 0 ? 12 : 7) * scale)
                     .offset(y: -diameter * 0.41)
                     .rotationEffect(.degrees(Double(i) * 30))
             }
 
             Circle()
-                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                .stroke(AppTheme.blue.opacity(0.18), lineWidth: 1)
                 .frame(width: diameter * 0.30, height: diameter * 0.30)
 
             Path { p in
@@ -294,14 +174,13 @@ struct LevelToolView: View {
                 p.move(to: CGPoint(x: c, y: c - arm))
                 p.addLine(to: CGPoint(x: c, y: c + arm))
             }
-            .stroke(Color.white.opacity(0.14), style: StrokeStyle(lineWidth: 1, dash: [4, 6]))
+            .stroke(AppTheme.blue.opacity(0.16), style: StrokeStyle(lineWidth: 1, dash: [4, 6]))
             .frame(width: diameter, height: diameter)
 
             Circle()
-                .stroke(motion.isLevel ? levelColor : AppTheme.blue.opacity(0.8), lineWidth: 2)
+                .stroke(motion.isLevel ? levelGreen : AppTheme.blue.opacity(0.7), lineWidth: 2)
                 .frame(width: 26 * scale, height: 26 * scale)
 
-            // Bubble
             ZStack {
                 Circle()
                     .fill(
@@ -322,14 +201,14 @@ struct LevelToolView: View {
                     .offset(x: -3 * scale, y: -5 * scale)
             }
             .frame(width: 38 * scale, height: 38 * scale)
-            .shadow(color: AppTheme.blue.opacity(0.5), radius: 12, y: 2)
+            .shadow(color: AppTheme.blue.opacity(0.45), radius: 10, y: 2)
             .offset(x: motion.offsetX * scale, y: motion.offsetY * scale)
             .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.82), value: motion.offsetX)
             .animation(.interactiveSpring(response: 0.12, dampingFraction: 0.82), value: motion.offsetY)
 
             if motion.isLevel {
                 Circle()
-                    .stroke(levelColor.opacity(0.7), lineWidth: 3)
+                    .stroke(levelGreen.opacity(0.75), lineWidth: 3)
                     .frame(width: diameter * 0.95, height: diameter * 0.95)
             }
         }
@@ -338,18 +217,24 @@ struct LevelToolView: View {
 
     private var background: some View {
         ZStack {
-            Color(red: 0.03, green: 0.05, blue: 0.10)
-            RadialGradient(
+            AppTheme.bg
+            LinearGradient(
                 colors: [
-                    motion.isLevel
-                        ? Color(red: 0.08, green: 0.4, blue: 0.3).opacity(0.4)
-                        : AppTheme.blue.opacity(0.22),
-                    .clear,
+                    AppTheme.blue.opacity(0.12),
+                    AppTheme.blueSoft.opacity(0.45),
+                    AppTheme.bg,
                 ],
-                center: .center,
-                startRadius: 40,
-                endRadius: 380
+                startPoint: .top,
+                endPoint: .bottom
             )
+            if motion.isLevel {
+                RadialGradient(
+                    colors: [levelGreen.opacity(0.16), .clear],
+                    center: .center,
+                    startRadius: 40,
+                    endRadius: 360
+                )
+            }
         }
         .animation(.easeInOut(duration: 0.3), value: motion.isLevel)
     }
