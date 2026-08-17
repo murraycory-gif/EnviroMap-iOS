@@ -216,7 +216,7 @@ enum PhotoTexturedMeshBuilder {
                     guard hits >= 5 else { continue }
                     let uvSpan = max(maxU - minU, maxV - minV)
                     // A small tile must not use a photo of the whole room
-                    if uvSpan > 0.42 { continue }
+                    if uvSpan > 0.72 { continue }
                     let avgD = distSum / Float(hits)
                     let score = Float(hits) / max(avgD * avgD, 0.12) / max(uvSpan, 0.04)
                     if score > bestScore {
@@ -277,7 +277,7 @@ enum PhotoTexturedMeshBuilder {
                 for (ki, kf) in kfs.enumerated() {
                     let toCam = kf.camPos - mid
                     let dist = simd_length(toCam)
-                    if dist < 0.1 || dist > 3.6 { continue }
+                    if dist < 0.1 || dist > 5.5 { continue }
                     if dist >= bestD { continue }
                     let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
                     if facing < 0.28 { continue }
@@ -294,7 +294,7 @@ enum PhotoTexturedMeshBuilder {
                     let wMax = max(e01, max(e12, e20))
                     let uvArea = abs((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y))
                     // Skip stretched UVs (that's the AK mess)
-                    let stretchOK = wMax < 0.38 && uvArea > 2e-6 && t01 > 1e-5 && e01 > 1e-4 &&
+                    let stretchOK = wMax < 1.25 && uvArea > 2e-6 && t01 > 1e-5 && e01 > 1e-4 &&
                         abs((t01 / max(e01, 1e-4)) - (t12 / max(e12, 1e-4))) < 8
                     if stretchOK {
                         func pushTex(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
@@ -393,6 +393,7 @@ enum PhotoTexturedMeshBuilder {
         }
 
         if !allIdx.isEmpty {
+            fillSmallHoles(pos: &allPos, nrm: &allNrm, col: &allCol, idx: &allIdx)
             smoothMesh(pos: &allPos, nrm: &allNrm, col: &allCol, idx: allIdx)
             let geom = makeVertexColorGeometry(pos: allPos, nrm: allNrm, col: allCol, idx: allIdx)
             let mat = SCNMaterial()
@@ -750,6 +751,58 @@ enum PhotoTexturedMeshBuilder {
         return SCNGeometry(sources: sources, elements: [element])
     }
 
+
+
+    /// Fill only small black gaps (under ~25cm). Never adds fake walls.
+    private static func fillSmallHoles(pos: inout [Float], nrm: inout [Float], col: inout [Float], idx: inout [UInt32]) {
+        let vCount = pos.count / 3
+        guard vCount > 8, idx.count >= 6 else { return }
+        var edgeCount: [UInt64: Int] = [:]
+        func ek(_ a: UInt32, _ b: UInt32) -> UInt64 {
+            let lo = UInt64(min(a, b)), hi = UInt64(max(a, b))
+            return (lo << 32) | hi
+        }
+        var t = 0
+        while t + 2 < idx.count {
+            let a = idx[t], b = idx[t + 1], c = idx[t + 2]
+            t += 3
+            edgeCount[ek(a, b), default: 0] += 1
+            edgeCount[ek(b, c), default: 0] += 1
+            edgeCount[ek(c, a), default: 0] += 1
+        }
+        var adj: [UInt32: [UInt32]] = [:]
+        for (k, n) in edgeCount where n == 1 {
+            let a = UInt32(k >> 32), b = UInt32(k & 0xFFFF_FFFF)
+            adj[a, default: []].append(b)
+            adj[b, default: []].append(a)
+        }
+        func P(_ i: UInt32) -> SIMD3<Float> {
+            let i = Int(i)
+            return SIMD3(pos[i*3], pos[i*3+1], pos[i*3+2])
+        }
+        var added = 0
+        let maxAdd = 1800
+        for (a, ns) in adj {
+            guard added < maxAdd else { break }
+            for b in ns {
+                if a >= b { continue }
+                let pa = P(a), pb = P(b)
+                if simd_length(pb - pa) > 0.28 { continue }
+                var best: UInt32?
+                var bestD: Float = 0.26
+                for (c, _) in adj {
+                    if c == a || c == b { continue }
+                    let pc = P(c)
+                    let d = max(simd_length(pc - pa), simd_length(pc - pb))
+                    if d < bestD { bestD = d; best = c }
+                }
+                guard let c = best else { continue }
+                if edgeCount[ek(a, b), default: 0] != 1 { continue }
+                idx.append(contentsOf: [a, b, c])
+                added += 1
+            }
+        }
+    }
 
     /// Soft surfaces: averaged normals + neighbor color blend (same orientation only).
     private static func smoothMesh(pos: inout [Float], nrm: inout [Float], col: inout [Float], idx: [UInt32]) {
