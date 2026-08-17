@@ -12,7 +12,6 @@ import CoreVideo
 enum PhotoTexturedMeshBuilder {
 
     struct Keyframe {
-        let camera: ARCamera
         let orientation: UIInterfaceOrientation
         let viewport: CGSize
         let displayTransform: CGAffineTransform
@@ -22,8 +21,10 @@ enum PhotoTexturedMeshBuilder {
         let rgbHeight: Int
         let camPos: SIMD3<Float>
         let image: UIImage
-        /// 0...1 average luminance — used for dark/bright adaptive scoring
         let meanLuma: Float
+        /// Value-type camera (never store ARCamera — it retains ARFrames)
+        let view: simd_float4x4
+        let proj: simd_float4x4
     }
 
     struct BuildResult {
@@ -224,7 +225,48 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Photo UV disabled (caused white wash + warp). Solid camera colors only.
+                if let ki = bestKf(mid, nMid),
+                   let u0 = projectUV(world: w0, kf: kfs[ki]),
+                   let u1 = projectUV(world: w1, kf: kfs[ki]),
+                   let u2 = projectUV(world: w2, kf: kfs[ki]) {
+                    // Reject tiny / flipped UV tris (those washed white before)
+                    let uvArea = abs((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y))
+                    if uvArea > 1e-6 {
+                        func pushTex(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
+                            texPos[ki].append(contentsOf: [w.x, w.y, w.z])
+                            texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
+                            texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
+                            let id = texBase[ki]
+                            texBase[ki] += 1
+                            return id
+                        }
+                        let a = pushTex(w0, n0, u0)
+                        let b = pushTex(w1, n1, u1)
+                        let c = pushTex(w2, n2, u2)
+                        texIdx[ki].append(contentsOf: [a, b, c])
+                        triUsed += 1
+                        continue
+                    }
+                }
+
+                // Photo texture when one camera sees the whole triangle (picture-clear).
+                func bestKf(_ w: SIMD3<Float>, _ n: SIMD3<Float>) -> Int? {
+                    var bi = -1
+                    var bw: Float = -1
+                    for (i, kf) in kfs.enumerated() {
+                        guard kiOk(i) else { continue }
+                        let toCam = kf.camPos - w
+                        let dist = simd_length(toCam)
+                        if dist < 0.06 || dist > 7 { continue }
+                        let facing = abs(simd_dot(n, toCam / max(dist, 1e-4)))
+                        if facing < 0.28 { continue }
+                        guard projectUV(world: w, kf: kf) != nil else { continue }
+                        let score = facing * facing / max(dist, 0.2)
+                        if score > bw { bw = score; bi = i }
+                    }
+                    return bi >= 0 ? bi : nil
+                }
+
                 // Vertex color path
                 func emit(_ i: Int) -> UInt32 {
                     if let e = remap[i] { return e }
@@ -473,7 +515,7 @@ enum PhotoTexturedMeshBuilder {
             let viewDir = toCam / max(dist, 1e-4)
             let facing = abs(simd_dot(normal, viewDir))
             if facing < 0.18 { continue } // skip glance / reflection views (purple smear)
-            let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
+            let view = kf.view * SIMD4<Float>(world.x, world.y, world.z, 1)
             if view.z > -0.05 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
@@ -604,7 +646,7 @@ enum PhotoTexturedMeshBuilder {
             let viewDir = toCam / max(dist, 1e-4)
             let facing = simd_dot(normal, viewDir)
             if facing < 0.38 { continue }
-            let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
+            let view = kf.view * SIMD4<Float>(world.x, world.y, world.z, 1)
             if view.z > -0.08 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
@@ -619,16 +661,22 @@ enum PhotoTexturedMeshBuilder {
     }
 
     private static func projectUV(world: SIMD3<Float>, kf: Keyframe) -> SIMD2<Float>? {
-        let projected = kf.camera.projectPoint(world, orientation: kf.orientation, viewportSize: kf.viewport)
-        guard projected.x.isFinite, projected.y.isFinite else { return nil }
+        let clip = kf.proj * kf.view * SIMD4<Float>(world.x, world.y, world.z, 1)
+        guard clip.w.isFinite, abs(clip.w) > 1e-6 else { return nil }
+        let ndcX = clip.x / clip.w
+        let ndcY = clip.y / clip.w
+        guard ndcX.isFinite, ndcY.isFinite else { return nil }
+        // NDC → UIKit viewport (top-left origin), then ARKit displayTransform → image
         let vpW = max(kf.viewport.width, 1)
         let vpH = max(kf.viewport.height, 1)
-        let vpNorm = CGPoint(x: projected.x / vpW, y: projected.y / vpH)
+        let px = (ndcX * 0.5 + 0.5) * Float(vpW)
+        let py = (1 - (ndcY * 0.5 + 0.5)) * Float(vpH)
+        let vpNorm = CGPoint(x: CGFloat(px) / vpW, y: CGFloat(py) / vpH)
         let imgNorm = vpNorm.applying(kf.displayTransform.inverted())
         guard imgNorm.x.isFinite, imgNorm.y.isFinite else { return nil }
         let u = Float(imgNorm.x)
         let v = Float(imgNorm.y)
-        guard u >= 0.005, u <= 0.995, v >= 0.005, v <= 0.995 else { return nil }
+        guard u >= 0.01, u <= 0.99, v >= 0.01, v <= 0.99 else { return nil }
         return SIMD2(u, v)
     }
 
@@ -935,7 +983,6 @@ enum PhotoTexturedMeshBuilder {
             cam.transform.columns.3.z
         )
         return Keyframe(
-            camera: cam,
             orientation: orientation,
             viewport: viewport,
             displayTransform: frame.displayTransform(for: orientation, viewportSize: viewport),
@@ -945,7 +992,9 @@ enum PhotoTexturedMeshBuilder {
             rgbHeight: h,
             camPos: camPos,
             image: UIImage(),
-            meanLuma: mean
+            meanLuma: mean,
+            view: cam.viewMatrix(for: orientation),
+            proj: cam.projectionMatrix(for: orientation, viewportSize: viewport, zNear: 0.01, zFar: 80)
         )
     }
 
