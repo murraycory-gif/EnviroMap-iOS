@@ -13,8 +13,8 @@ enum MeshDensityConfig {
     static var maxKeyframes: Int { 64 }
     static var maxChunks: Int { 12_000 }
 
-    static var liveKeyframeMaxWidth: Int { 720 }
-    static var sharpKeyframeMaxWidth: Int { 1080 }
+    static var liveKeyframeMaxWidth: Int { 960 }
+    static var sharpKeyframeMaxWidth: Int { 1280 }
     static var keyframeMaxWidth: Int { 1600 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }
@@ -26,7 +26,7 @@ enum MeshDensityConfig {
 
     static var finalVertexSoftCap: Int { 3_500_000 }
     static var triangleBudget: Int { highDetail ? 1_400_000 : 800_000 }
-    static var bakeKeyframeLimit: Int { 48 }
+    static var bakeKeyframeLimit: Int { 56 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 

@@ -38,7 +38,7 @@ struct FullEnvironmentScanView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme((model.phase == .processing || model.phase == .saving || model.phase == .preview) ? .light : .dark)
         .onChange(of: model.exportReadyToken) { _, _ in
             autoSaveAndOpenViewer()
         }
@@ -184,84 +184,81 @@ struct FullEnvironmentScanView: View {
 
     private var processingLayer: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.02, green: 0.05, blue: 0.14),
-                    Color(red: 0.04, green: 0.10, blue: 0.28),
-                    Color(red: 0.01, green: 0.03, blue: 0.10),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
+            AppTheme.bg.ignoresSafeArea()
             Circle()
-                .fill(AppTheme.blue.opacity(0.18))
+                .fill(AppTheme.blue.opacity(0.14))
                 .frame(width: 280, height: 280)
                 .blur(radius: 50)
-                .offset(x: -40, y: -120)
+                .offset(x: -50, y: -160)
             Circle()
-                .fill(Color.cyan.opacity(0.10))
-                .frame(width: 220, height: 220)
-                .blur(radius: 40)
-                .offset(x: 80, y: 160)
+                .fill(AppTheme.blueSoft.opacity(0.9))
+                .frame(width: 240, height: 240)
+                .blur(radius: 36)
+                .offset(x: 90, y: 200)
 
-            VStack(spacing: 28) {
+            VStack(spacing: 0) {
+                BrandHeader(height: 48)
+                    .padding(.top, 18)
+
                 Spacer()
 
                 ZStack {
                     Circle()
-                        .stroke(AppTheme.blue.opacity(0.2), lineWidth: 6)
-                        .frame(width: 120, height: 120)
+                        .stroke(AppTheme.blueSoft, lineWidth: 8)
+                        .frame(width: 148, height: 148)
                     Circle()
-                        .trim(from: 0, to: max(0.05, model.bakeProgress))
+                        .trim(from: 0, to: max(0.04, model.bakeProgress))
                         .stroke(
                             AngularGradient(
-                                colors: [AppTheme.blue, Color.cyan, AppTheme.blueDeep, AppTheme.blue],
+                                colors: [AppTheme.blue, Color(red: 0.35, green: 0.65, blue: 1.0), AppTheme.blueDeep, AppTheme.blue],
                                 center: .center
                             ),
-                            style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                            style: StrokeStyle(lineWidth: 8, lineCap: .round)
                         )
-                        .frame(width: 120, height: 120)
+                        .frame(width: 148, height: 148)
                         .rotationEffect(.degrees(-90))
                         .animation(.easeInOut(duration: 0.35), value: model.bakeProgress)
 
                     VStack(spacing: 2) {
-                        Image(systemName: "cube.transparent.fill")
-                            .font(.system(size: 32, weight: .bold))
-                            .foregroundStyle(.white)
-                        Text("\(Int(model.bakeProgress * 100))%")
-                            .font(.caption.weight(.bold).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.85))
+                        Text("\(Int(model.bakeProgress * 100))")
+                            .font(.system(size: 44, weight: .bold, design: .rounded))
+                            .foregroundStyle(AppTheme.text)
+                            .monospacedDigit()
+                        Text("%")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(AppTheme.textSecondary)
                     }
                 }
 
-                VStack(spacing: 10) {
-                    Text("Building Your 3D Space")
-                    Text(BuildStamp.label)
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(Color(red: 0.4, green: 0.95, blue: 0.7))
+                VStack(spacing: 8) {
+                    Text("Building Your Space")
                         .font(.system(size: 26, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                    Text(model.bakeStatus)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Color.cyan.opacity(0.9))
+                        .foregroundStyle(AppTheme.text)
+                    Text(friendlyBakeStatus)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(AppTheme.textSecondary)
                         .multilineTextAlignment(.center)
                         .animation(.easeInOut, value: model.bakeStatus)
+                    Text(BuildStamp.label)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(AppTheme.blue.opacity(0.75))
+                        .padding(.top, 4)
                 }
+                .padding(.top, 28)
+                .padding(.horizontal, 28)
 
-                HStack(spacing: 10) {
-                    processChip("\(model.meshChunks)", "Surfaces")
-                    processChip(model.hasColorFrames ? "Color" : "…", "Paint")
-                    processChip(model.coverageLabel, "Cover")
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(AppTheme.blueSoft)
+                        Capsule()
+                            .fill(AppTheme.blue)
+                            .frame(width: max(12, geo.size.width * CGFloat(max(0.04, model.bakeProgress))))
+                            .animation(.easeInOut(duration: 0.35), value: model.bakeProgress)
+                    }
                 }
-                .padding(.top, 8)
-
-                Text("Mapping real colors onto LiDAR mesh\nAlmost There — this is the magic step.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.45))
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+                .frame(height: 6)
+                .padding(.horizontal, 48)
+                .padding(.top, 28)
 
                 Spacer()
                 Spacer()
@@ -270,18 +267,26 @@ struct FullEnvironmentScanView: View {
         }
     }
 
-    private func processChip(_ value: String, _ label: String) -> some View {
-        VStack(spacing: 4) {
-            Text(value)
-                .font(.headline.weight(.bold))
-                .foregroundStyle(.white)
-            Text(label)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.5))
+    /// Only what the person using the app needs to see.
+    private var friendlyBakeStatus: String {
+        let raw = model.bakeStatus.lowercased()
+        if raw.contains("saving") { return "Saving To My Rooms…" }
+        if raw.contains("opening") || raw.contains("framing") || raw.contains("ready") {
+            return "Opening Your Scan…"
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        if raw.contains("color") || raw.contains("paint") || raw.contains("surface") {
+            return "Adding Your Colors…"
+        }
+        if raw.contains("sharpen") || raw.contains("touch") || raw.contains("polish") {
+            return "Sharpening The Picture…"
+        }
+        if raw.contains("mesh") || raw.contains("gather") || raw.contains("pull") || raw.contains("lock") {
+            return "Gathering Your Scan…"
+        }
+        if raw.contains("finish") || raw.contains("almost") {
+            return "Almost Ready…"
+        }
+        return "Putting Your Scan Together…"
     }
 
 
@@ -1400,7 +1405,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         defer { kfBusy = false }
         // Every 5th live photo is sharper so the Tesla paint stays readable
         let n = keyframes.count
-        let w = (n % 5 == 0)
+        let w = (n % 3 == 0)
             ? MeshDensityConfig.sharpKeyframeMaxWidth
             : MeshDensityConfig.liveKeyframeMaxWidth
         storeKeyframe(from: frame, maxWidth: w)

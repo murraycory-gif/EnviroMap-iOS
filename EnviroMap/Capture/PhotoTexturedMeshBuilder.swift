@@ -421,7 +421,8 @@ enum PhotoTexturedMeshBuilder {
             mat.diffuse.wrapT = .clamp
             mat.diffuse.magnificationFilter = .linear
             mat.diffuse.minificationFilter = .linear
-            mat.diffuse.mipFilter = .none
+            mat.diffuse.mipFilter = .linear
+            mat.diffuse.maxAnisotropy = 8
             mat.diffuse.contentsTransform = SCNMatrix4Identity
             geom.materials = [mat]
             let node = SCNNode(geometry: geom)
@@ -441,7 +442,8 @@ enum PhotoTexturedMeshBuilder {
             mat.diffuse.wrapT = .clamp
             mat.diffuse.magnificationFilter = .linear
             mat.diffuse.minificationFilter = .linear
-            mat.diffuse.mipFilter = .none
+            mat.diffuse.mipFilter = .linear
+            mat.diffuse.maxAnisotropy = 8
             geom.materials = [mat]
             let node = SCNNode(geometry: geom)
             node.name = "photoWall_\(ki)"
@@ -1343,14 +1345,17 @@ enum PhotoTexturedMeshBuilder {
             let yPtr = yBase.assumingMemoryBound(to: UInt8.self)
             let cPtr = cBase.assumingMemoryBound(to: UInt8.self)
             for j in 0..<h {
-                let sy = min(j * fullH / h, fullH - 1)
-                let yRow = yPtr.advanced(by: sy * yStride)
-                let cRow = cPtr.advanced(by: (sy / 2) * cStride)
+                let sy0 = min(j * fullH / h, fullH - 1)
+                let sy1 = min(sy0 + 1, fullH - 1)
+                let yRow0 = yPtr.advanced(by: sy0 * yStride)
+                let yRow1 = yPtr.advanced(by: sy1 * yStride)
+                let cRow = cPtr.advanced(by: (sy0 / 2) * cStride)
                 for i in 0..<w {
-                    let sx = min(i * fullW / w, fullW - 1)
-                    var Y = Float(yRow[sx])
+                    let sx0 = min(i * fullW / w, fullW - 1)
+                    let sx1 = min(sx0 + 1, fullW - 1)
+                    var Y = (Float(yRow0[sx0]) + Float(yRow0[sx1]) + Float(yRow1[sx0]) + Float(yRow1[sx1])) * 0.25
                     if videoRange { Y = (Y - 16) * (255.0 / 219.0) }
-                    let uv = (sx / 2) * 2
+                    let uv = (sx0 / 2) * 2
                     let Cb = Float(cRow[uv]) - 128
                     let Cr = Float(cRow[uv + 1]) - 128
                     var r = Y + 1.402 * Cr
