@@ -958,12 +958,17 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             if simd_dot(n, room - origin) > 0 { n = -n }
             var t = raw.transform
             t.columns.3 += SIMD4<Float>(n.x, n.y, n.z, 0) * 0.05
+            // Plane sitting on the Tesla itself — skip (those became white cards)
+            if occ.contains(Self.cellKey(origin)) { continue }
             let pushed = CapturedMeshChunk(
                 id: raw.id, transform: t,
                 positions: raw.positions, normals: raw.normals,
                 indices: raw.indices, colors: raw.colors
             )
             if let clipped = Self.clipPlaneOffObjects(pushed, occ: occ) {
+                // If most of the plane was on objects, it is the car — drop it
+                let before = max(raw.indices.count, 1)
+                if clipped.indices.count * 100 / before < 65 { continue }
                 walls[clipped.id] = clipped
             }
         }
