@@ -933,6 +933,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         if rc > 0 { room /= Float(rc) }
 
+        // Cells where LiDAR already has the Tesla / objects — walls must not paint here
+        let occ = Self.objectOccupancy(from: Array(fresh.values))
         var walls: [UUID: CapturedMeshChunk] = [:]
         for plane in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) {
             let w: Float
@@ -956,13 +958,16 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             if simd_dot(n, room - origin) > 0 { n = -n }
             var t = raw.transform
             t.columns.3 += SIMD4<Float>(n.x, n.y, n.z, 0) * 0.05
-            walls[raw.id] = CapturedMeshChunk(
+            let pushed = CapturedMeshChunk(
                 id: raw.id, transform: t,
                 positions: raw.positions, normals: raw.normals,
                 indices: raw.indices, colors: raw.colors
             )
+            if let clipped = Self.clipPlaneOffObjects(pushed, occ: occ) {
+                walls[clipped.id] = clipped
+            }
         }
-        print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count)")
+        print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count) occ=\(occ.count)")
 
         stateLock.lock()
         for (id, chunk) in fresh { chunks[id] = chunk }
@@ -1516,6 +1521,66 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
 
+
+    private static func cellKey(_ p: SIMD3<Float>, s: Float = 0.16) -> Int64 {
+        let ix = Int64(floor(p.x / s))
+        let iy = Int64(floor(p.y / s))
+        let iz = Int64(floor(p.z / s))
+        return (ix & 0x1FFFFF) << 42 | (iy & 0x1FFFFF) << 21 | (iz & 0x1FFFFF)
+    }
+
+    /// Occupied cells around real LiDAR verts (car, tools) so wall quads cannot slice them.
+    private static func objectOccupancy(from chunks: [CapturedMeshChunk]) -> Set<Int64> {
+        var occ = Set<Int64>()
+        occ.reserveCapacity(8_000)
+        for chunk in chunks {
+            let t = chunk.transform
+            for p in chunk.positions {
+                let w4 = t * SIMD4<Float>(p.x, p.y, p.z, 1)
+                let w = SIMD3<Float>(w4.x, w4.y, w4.z)
+                if w.y < 0.08 || w.y > 1.85 { continue }
+                let k = cellKey(w)
+                occ.insert(k)
+                // 1-cell halo so the wall stops short of the paint
+                for dx in Int64(-1)...1 {
+                    for dy in Int64(-1)...1 {
+                        for dz in Int64(-1)...1 {
+                            occ.insert(k &+ (dx << 42) &+ (dy << 21) &+ dz)
+                        }
+                    }
+                }
+            }
+            if occ.count > 80_000 { break }
+        }
+        return occ
+    }
+
+    private static func clipPlaneOffObjects(_ chunk: CapturedMeshChunk, occ: Set<Int64>) -> CapturedMeshChunk? {
+        guard !occ.isEmpty else { return chunk }
+        let t = chunk.transform
+        var keep: [UInt32] = []
+        keep.reserveCapacity(chunk.indices.count)
+        var i = 0
+        while i + 2 < chunk.indices.count {
+            let a = Int(chunk.indices[i]), b = Int(chunk.indices[i+1]), c = Int(chunk.indices[i+2])
+            i += 3
+            guard a < chunk.positions.count, b < chunk.positions.count, c < chunk.positions.count else { continue }
+            func W(_ p: SIMD3<Float>) -> SIMD3<Float> {
+                let w = t * SIMD4<Float>(p.x, p.y, p.z, 1)
+                return SIMD3(w.x, w.y, w.z)
+            }
+            let wa = W(chunk.positions[a]), wb = W(chunk.positions[b]), wc = W(chunk.positions[c])
+            let mid = (wa + wb + wc) / 3
+            if occ.contains(cellKey(mid)) { continue }
+            keep.append(contentsOf: [UInt32(a), UInt32(b), UInt32(c)])
+        }
+        guard keep.count >= 3 else { return nil }
+        return CapturedMeshChunk(
+            id: chunk.id, transform: chunk.transform,
+            positions: chunk.positions, normals: chunk.normals,
+            indices: keep, colors: chunk.colors
+        )
+    }
 
     /// Full wall/ceiling rectangle from ARKit extent (not the scrap polygon).
     private static func copyPlaneChunk(from plane: ARPlaneAnchor) -> CapturedMeshChunk? {
