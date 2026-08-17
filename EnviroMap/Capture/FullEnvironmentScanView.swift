@@ -925,14 +925,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 fresh[chunk.id] = chunk
             }
         }
+        // Finish tiles are the latest ARKit mesh — never keep a stale live copy
         stateLock.lock()
-        for (id, chunk) in fresh {
-            if let old = chunks[id],
-               old.positions.count >= chunk.positions.count {
-                continue
-            }
-            chunks[id] = chunk
-        }
+        for (id, chunk) in fresh { chunks[id] = chunk }
         stateLock.unlock()
         // One high-res color frame at Finish (not during walk — that retained ARFrames)
         ingestKeyframe(from: frame, highRes: true)

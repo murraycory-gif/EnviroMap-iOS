@@ -1,6 +1,6 @@
 import Foundation
 
 enum BuildStamp {
-    static let id = "Build 0810-BB"
-    static let label = "EnviroMap · Build 0810-BB"
+    static let id = "Build 0810-BC"
+    static let label = "EnviroMap · Build 0810-BC"
 }
