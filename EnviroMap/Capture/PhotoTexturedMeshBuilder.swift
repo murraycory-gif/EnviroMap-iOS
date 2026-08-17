@@ -204,7 +204,7 @@ enum PhotoTexturedMeshBuilder {
                         let n = worldN(vi)
                         let toCam = kf.camPos - w
                         let dist = simd_length(toCam)
-                        if dist < 0.08 || dist > 4.2 { continue } // one photo per tile, not the whole room
+                        if dist < 0.04 || dist > 12 { continue }
                         let facing = abs(simd_dot(n, toCam / max(dist, 1e-4)))
                         if facing < 0.35 { continue }
                         guard let uv = projectUV(world: w, kf: kf) else { continue }
@@ -280,7 +280,7 @@ enum PhotoTexturedMeshBuilder {
                     for (ki, kf) in kfs.enumerated() {
                         let toCam = kf.camPos - mid
                         let dist = simd_length(toCam)
-                        if dist < 0.1 || dist > 5.0 { continue }
+                        if dist < 0.04 || dist > 12 { continue }
                         let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
                         if facing < 0.28 { continue }
                         if projectUV(world: mid, kf: kf) == nil { continue }
@@ -563,7 +563,7 @@ enum PhotoTexturedMeshBuilder {
         for kf in keyframes.reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.04 || dist > 8 { continue }
+            if dist < 0.04 || dist > 14 { continue }
             if let uv = projectUV(world: world, kf: kf),
                let c = sampleBilinear(kf, u: uv.x, v: uv.y) {
                 if dist < anyD {
@@ -701,7 +701,7 @@ enum PhotoTexturedMeshBuilder {
         for (i, kf) in keyframes.enumerated().reversed() {
             let toCam = kf.camPos - world
             let dist = simd_length(toCam)
-            if dist < 0.12 || dist > 4.5 { continue }
+            if dist < 0.04 || dist > 12 { continue }
             let viewDir = toCam / max(dist, 1e-4)
             let facing = simd_dot(normal, viewDir)
             if facing < 0.38 { continue }

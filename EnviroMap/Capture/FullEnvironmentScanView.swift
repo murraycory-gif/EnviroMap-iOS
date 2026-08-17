@@ -760,6 +760,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var meshBankBusy = false
     private var depthBusy = false
     private var lastBankIdTime: [UUID: TimeInterval] = [:]
+    private var planeBank: [UUID: (t: simd_float4x4, w: Float, h: Float, align: ARPlaneAnchor.Alignment, origin: SIMD3<Float>, center: SIMD3<Float>)] = [:]
     private var lastCamPos: SIMD3<Float>?
     private var kfBusy = false
     private var lastStatsEmit: TimeInterval = 0
@@ -825,6 +826,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         keyframes.removeAll()
         depthPoints.removeAll()
         lastBankIdTime.removeAll()
+        planeBank.removeAll()
         lastKeyframeTime = 0
         lastMeshCopyTime = 0
         lastDepthTime = 0
@@ -946,29 +948,22 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let occ = Self.objectOccupancy(from: Array(fresh.values))
         var walls: [UUID: CapturedMeshChunk] = [:]
         for plane in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) {
-            let w: Float
-            let h: Float
-            if #available(iOS 16.0, *) {
-                w = plane.planeExtent.width
-                h = plane.planeExtent.height
-            } else {
-                w = plane.extent.x
-                h = plane.extent.z
-            }
-            guard max(w, h) >= 0.50 else { continue }
-            let origin = SIMD3<Float>(plane.transform.columns.3.x, plane.transform.columns.3.y, plane.transform.columns.3.z)
-            let isWall = plane.alignment == .vertical
-            let isCeil = plane.alignment == .horizontal && origin.y > 1.7
+            Self.upsertPlane(plane, into: &planeBank)
+        }
+        for (pid, snap) in planeBank {
+            let w = snap.w, h = snap.h
+            guard max(w, h) >= 0.35 else { continue }
+            let isWall = snap.align == .vertical
+            let isCeil = snap.align == .horizontal && snap.origin.y > 1.4
             guard isWall || isCeil else { continue }
-            guard let raw = Self.copyPlaneChunk(from: plane) else { continue }
-            var n = SIMD3<Float>(plane.transform.columns.1.x, plane.transform.columns.1.y, plane.transform.columns.1.z)
+            guard let raw = Self.makeExtentWall(id: pid, transform: snap.t, width: w, height: h, center: snap.center) else { continue }
+            var n = SIMD3<Float>(snap.t.columns.1.x, snap.t.columns.1.y, snap.t.columns.1.z)
             let nlen = simd_length(n)
             if nlen > 1e-5 { n /= nlen } else { n = SIMD3(0, 1, 0) }
-            if simd_dot(n, room - origin) > 0 { n = -n }
+            if simd_dot(n, room - snap.origin) > 0 { n = -n }
             var t = raw.transform
-            t.columns.3 += SIMD4<Float>(n.x, n.y, n.z, 0) * 0.05
-            // Plane sitting on the Tesla itself — skip (those became white cards)
-            if occ.contains(Self.cellKey(origin)) { continue }
+            t.columns.3 += SIMD4<Float>(n.x, n.y, n.z, 0) * 0.04
+            if occ.contains(Self.cellKey(snap.origin)) { continue }
             let pushed = CapturedMeshChunk(
                 id: raw.id, transform: t,
                 positions: raw.positions, normals: raw.normals,
@@ -976,14 +971,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 isBackdrop: true
             )
             if let clipped = Self.clipPlaneOffObjects(pushed, occ: occ) {
-                // Keep whatever is left — do NOT drop the whole wall
                 walls[clipped.id] = clipped
             }
         }
-        if walls.count < 2 {
-            for shell in Self.makeRoomShell(from: Array(fresh.values), occ: occ) {
-                walls[shell.id] = shell
-            }
+        for shell in Self.makeRoomShell(from: Array(fresh.values), occ: occ) {
+            if walls[shell.id] == nil { walls[shell.id] = shell }
         }
         print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count) occ=\(occ.count)")
 
@@ -1217,6 +1209,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             moving = simd_length(pos - prev) > 0.012
         }
         lastCamPos = pos
+
+        // Remember every wall ARKit ever grew (near or far)
+        bankPlanes(from: frame)
 
         // Finish harvest — copy mesh and return immediately (never stall the camera)
         harvestLock.lock()
@@ -1485,7 +1480,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             for u in stride(from: 0, to: dw, by: step) {
                 let depth = dBase.advanced(by: v * dStride + u * MemoryLayout<Float32>.size)
                     .assumingMemoryBound(to: Float32.self).pointee
-                if !depth.isFinite || depth < 0.15 || depth > 5.5 { continue }
+                if !depth.isFinite || depth < 0.08 || depth > 12 { continue }
 
                 // Unproject depth pixel into camera space then world
                 let x = (Float(u) - cx) * depth / max(fx, 1e-4)
@@ -1612,6 +1607,71 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             id: chunk.id, transform: chunk.transform,
             positions: chunk.positions, normals: chunk.normals,
             indices: keep, colors: chunk.colors, isBackdrop: chunk.isBackdrop
+        )
+    }
+
+    private func bankPlanes(from frame: ARFrame) {
+        for plane in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) {
+            Self.upsertPlane(plane, into: &planeBank)
+        }
+    }
+
+    private static func upsertPlane(
+        _ plane: ARPlaneAnchor,
+        into bank: inout [UUID: (t: simd_float4x4, w: Float, h: Float, align: ARPlaneAnchor.Alignment, origin: SIMD3<Float>, center: SIMD3<Float>)]
+    ) {
+        let w: Float
+        let h: Float
+        if #available(iOS 16.0, *) {
+            w = plane.planeExtent.width
+            h = plane.planeExtent.height
+        } else {
+            w = plane.extent.x
+            h = plane.extent.z
+        }
+        let origin = SIMD3<Float>(plane.transform.columns.3.x, plane.transform.columns.3.y, plane.transform.columns.3.z)
+        let c = SIMD3<Float>(plane.center.x, plane.center.y, plane.center.z)
+        if let old = bank[plane.identifier], old.w * old.h >= w * h { return }
+        bank[plane.identifier] = (plane.transform, w, h, plane.alignment, origin, c)
+    }
+
+    private static func makeExtentWall(
+        id: UUID,
+        transform: simd_float4x4,
+        width: Float,
+        height: Float,
+        center: SIMD3<Float>
+    ) -> CapturedMeshChunk? {
+        guard width >= 0.3, height >= 0.3 else { return nil }
+        let step: Float = 0.30
+        let nx = min(56, max(1, Int(ceil(width / step))))
+        let nz = min(56, max(1, Int(ceil(height / step))))
+        let nrm = SIMD3<Float>(0, 1, 0)
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        for iz in 0...nz {
+            let v = Float(iz) / Float(nz)
+            for ix in 0...nx {
+                let u = Float(ix) / Float(nx)
+                positions.append(SIMD3(center.x + (u - 0.5) * width, 0, center.z + (v - 0.5) * height))
+                normals.append(nrm)
+            }
+        }
+        var indices: [UInt32] = []
+        let stride = nx + 1
+        for iz in 0..<nz {
+            for ix in 0..<nx {
+                let a = UInt32(iz * stride + ix)
+                let b = a + 1
+                let c = a + UInt32(stride)
+                let d = c + 1
+                indices.append(contentsOf: [a, c, b, b, c, d])
+            }
+        }
+        return CapturedMeshChunk(
+            id: id, transform: transform,
+            positions: positions, normals: normals, indices: indices,
+            isBackdrop: true
         )
     }
 
