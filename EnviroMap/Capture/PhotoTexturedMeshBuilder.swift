@@ -243,7 +243,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.06, triUsed < triBudget {
+                if edge > 0.04, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -251,12 +251,7 @@ enum PhotoTexturedMeshBuilder {
                     let nm12 = simd_normalize(n1 + n2)
                     let nm20 = simd_normalize(n2 + n0)
                     func emitMid(_ w: SIMD3<Float>, _ n: SIMD3<Float>) -> UInt32 {
-                        let c: (UInt8, UInt8, UInt8)
-                        if colorBudgetExhausted {
-                            c = Self.visibleGray
-                        } else {
-                            c = fastColor(world: w, normal: n, keyframes: kfs)
-                        }
+                        let c = fastColor(world: w, normal: n, keyframes: kfs)
                         allPos.append(contentsOf: [w.x, w.y, w.z])
                         allNrm.append(contentsOf: [n.x, n.y, n.z])
                         allCol.append(contentsOf: [
@@ -483,11 +478,12 @@ enum PhotoTexturedMeshBuilder {
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
-            let w = Float(facing) * (1 / max(dist, 0.2)) * (0.4 + 0.6 * center)
+            // Closest sharp view wins — that's what made Build O look like the real car
+            let w = Float(facing * facing) * (1 / max(dist * dist, 0.04)) * (0.35 + 0.65 * center)
             if w > bestW {
                 bestW = w
                 bestC = c
-                if w > 1.6 { break }
+                if w > 8 { break }
             }
         }
         if let c = bestC { return mildEnhance(c) }
@@ -631,7 +627,7 @@ enum PhotoTexturedMeshBuilder {
         guard imgNorm.x.isFinite, imgNorm.y.isFinite else { return nil }
         let u = Float(imgNorm.x)
         let v = Float(imgNorm.y)
-        guard u >= 0.02, u <= 0.98, v >= 0.02, v <= 0.98 else { return nil }
+        guard u >= 0.005, u <= 0.995, v >= 0.005, v <= 0.995 else { return nil }
         return SIMD2(u, v)
     }
 
@@ -720,7 +716,18 @@ enum PhotoTexturedMeshBuilder {
     }
 
     private static func mildEnhance(_ c: (UInt8, UInt8, UInt8)) -> (UInt8, UInt8, UInt8) {
-        adaptiveEnhance(c, sceneLuma: 0.5)
+        // Tiny pop only — keep the real camera color
+        func f(_ x: UInt8) -> Float {
+            let v = (Float(x) / 255 - 0.5) * 1.06 + 0.5
+            return min(1, max(0, v))
+        }
+        var r = f(c.0), g = f(c.1), bl = f(c.2)
+        let avg = (r + g + bl) / 3
+        let sat: Float = 1.08
+        r = min(1, max(0, avg + (r - avg) * sat))
+        g = min(1, max(0, avg + (g - avg) * sat))
+        bl = min(1, max(0, avg + (bl - avg) * sat))
+        return (UInt8(r * 255), UInt8(g * 255), UInt8(bl * 255))
     }
 
     /// Dark rooms: lift shadows. Bright outdoor: tame highlights. Always keep color.
@@ -914,10 +921,10 @@ enum PhotoTexturedMeshBuilder {
         maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
         let cap = min(maxWidth, MeshDensityConfig.keyframeMaxWidth)
-        guard var (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap) else { return nil }
+        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap) else { return nil }
 
-        // Adaptive levels for dark rooms vs bright outdoor before bake
-        let mean = applyAdaptiveLevels(&rgb, width: w, height: h)
+        // Raw camera color — no global levels (those washed detail)
+        let mean = lumaMean(rgb, width: w, height: h)
 
         let cam = frame.camera
         let camPos = SIMD3<Float>(
@@ -942,6 +949,21 @@ enum PhotoTexturedMeshBuilder {
 
     /// Lift shadows in dark frames; tame whites in bright outdoor frames.
     /// Returns mean luma 0...1 after adjustment.
+    private static func lumaMean(_ rgb: [UInt8], width: Int, height: Int) -> Float {
+        let n = width * height
+        guard n > 0, rgb.count >= n * 3 else { return 0.5 }
+        var sum: Float = 0
+        var cnt = 0
+        var i = 0
+        while i < n {
+            let o = i * 3
+            sum += (Float(rgb[o]) + Float(rgb[o + 1]) + Float(rgb[o + 2])) / (3 * 255)
+            cnt += 1
+            i += 11
+        }
+        return cnt > 0 ? sum / Float(cnt) : 0.5
+    }
+
     private static func applyAdaptiveLevels(
         _ rgb: inout [UInt8],
         width: Int,
@@ -1007,7 +1029,14 @@ enum PhotoTexturedMeshBuilder {
                 let sy = min(Int((CGFloat(j) / max(scale, 0.0001)).rounded(.down)), fullH - 1)
                 for i in 0..<w {
                     let sx = min(Int((CGFloat(i) / max(scale, 0.0001)).rounded(.down)), fullW - 1)
-                    let Y = Float(yBase.advanced(by: sy * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
+                    // 2x2 box on Y — less blocky than nearest
+                    let sx1 = min(sx + 1, fullW - 1)
+                    let sy1 = min(sy + 1, fullH - 1)
+                    let Y0 = Float(yBase.advanced(by: sy * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
+                    let Y1 = Float(yBase.advanced(by: sy * yStride + sx1).assumingMemoryBound(to: UInt8.self).pointee)
+                    let Y2 = Float(yBase.advanced(by: sy1 * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
+                    let Y3 = Float(yBase.advanced(by: sy1 * yStride + sx1).assumingMemoryBound(to: UInt8.self).pointee)
+                    let Y = (Y0 + Y1 + Y2 + Y3) * 0.25
                     let cPtr = cBase.advanced(by: (sy / 2) * cStride + (sx / 2) * 2).assumingMemoryBound(to: UInt8.self)
                     let Cb = Float(cPtr[0]) - 128
                     let Cr = Float(cPtr[1]) - 128
