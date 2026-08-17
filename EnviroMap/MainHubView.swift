@@ -118,36 +118,14 @@ struct ToolsHomeView: View {
                             Button {
                                 switchToLibrary()
                             } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: "building.2.fill")
-                                        .font(.title3.weight(.semibold))
-                                        .foregroundStyle(AppTheme.blue)
-                                        .frame(width: 48, height: 48)
-                                        .background(AppTheme.blueSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text("My Rooms")
-                                            .font(.headline.weight(.bold))
-                                            .foregroundStyle(AppTheme.text)
-                                        Text(roomCount == 0 ? "No Scans Yet" : "\(roomCount) Saved")
-                                            .font(.subheadline)
-                                            .foregroundStyle(AppTheme.textSecondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption.weight(.bold))
-                                        .foregroundStyle(AppTheme.textTertiary)
-                                }
-                                .padding(14)
-                                .frame(maxWidth: .infinity, minHeight: 64)
-                                .background(cardBg)
-                                .contentShape(Rectangle())
+                                primaryHeroCard(
+                                    title: "My Rooms",
+                                    subtitle: roomCount == 0 ? "No Scans Yet" : "\(roomCount) Saved · Open Your Library",
+                                    icon: "building.2.fill",
+                                    gradient: true
+                                )
                             }
                             .buttonStyle(.plain)
-
-                            Text("Tools")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundStyle(AppTheme.textSecondary)
-                                .padding(.top, 6)
 
                             ForEach(toolItems) { item in
                                 Button {
@@ -166,7 +144,7 @@ struct ToolsHomeView: View {
                             }
                         }
                         .padding(.horizontal, 20)
-                        .padding(.bottom, 16)
+                        .padding(.bottom, 28)
                     }
                 }
             }
@@ -201,27 +179,27 @@ struct ToolsHomeView: View {
             ZStack {
                 Circle()
                     .fill(.white.opacity(0.22))
-                    .frame(width: 80, height: 80)
+                    .frame(width: 64, height: 64)
                 Image(systemName: icon)
-                    .font(.system(size: 34, weight: .bold))
+                    .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(.white)
             }
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
                 Text(subtitle)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .opacity(0.95)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
             Image(systemName: "arrow.right.circle.fill")
-                .font(.system(size: 38))
+                .font(.system(size: 32))
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 22)
-        .padding(.vertical, 26)
-        .frame(maxWidth: .infinity, minHeight: 148)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, minHeight: 112)
         .background(
             RoundedRectangle(cornerRadius: 26, style: .continuous)
                 .fill(
