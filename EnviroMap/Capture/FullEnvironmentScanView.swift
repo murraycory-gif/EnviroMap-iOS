@@ -845,7 +845,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         config.environmentTexturing = .automatic
         // Plane detection optional — mesh recon is what we need
-        config.planeDetection = []
+        config.planeDetection = [.horizontal, .vertical]
         config.isLightEstimationEnabled = true
         config.providesAudioData = false
         // Better outdoor/indoor auto exposure when device supports it
@@ -881,31 +881,34 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var harvestDone: DispatchSemaphore?
 
     func forceFinalHarvest() {
-        // One fast mesh snapshot. Do NOT decode camera frames here (that retains ARFrames
-        // and kills tracking — harvest then returns 0 tiles).
-        let sem = DispatchSemaphore(value: 0)
-        harvestLock.lock()
-        harvestDone = sem
-        harvestNeeded = 1
-        harvestLock.unlock()
-
-        let kick = {
-            self.snapshotAllMeshTiles()
-            self.harvestLock.lock()
-            self.harvestNeeded = 0
-            let s = self.harvestDone
-            self.harvestDone = nil
-            self.harvestLock.unlock()
-            s?.signal()
+        // Two fast mesh snapshots ~0.4s apart. Mesh only — never decode camera
+        // (that retained ARFrames and zeroed the harvest).
+        func oneShot() {
+            let sem = DispatchSemaphore(value: 0)
+            harvestLock.lock()
+            harvestDone = sem
+            harvestNeeded = 1
+            harvestLock.unlock()
+            let kick = {
+                self.snapshotAllMeshTiles()
+                self.harvestLock.lock()
+                self.harvestNeeded = 0
+                let s = self.harvestDone
+                self.harvestDone = nil
+                self.harvestLock.unlock()
+                s?.signal()
+            }
+            if Thread.isMainThread { kick() }
+            else { DispatchQueue.main.async(execute: kick) }
+            _ = sem.wait(timeout: .now() + 2.5)
+            harvestLock.lock()
+            harvestNeeded = 0
+            harvestDone = nil
+            harvestLock.unlock()
         }
-        if Thread.isMainThread { kick() }
-        else { DispatchQueue.main.async(execute: kick) }
-
-        _ = sem.wait(timeout: .now() + 3.0)
-        harvestLock.lock()
-        harvestNeeded = 0
-        harvestDone = nil
-        harvestLock.unlock()
+        oneShot()
+        Thread.sleep(forTimeInterval: 0.40)
+        oneShot()
 
         stateLock.lock()
         let total = chunks.count
