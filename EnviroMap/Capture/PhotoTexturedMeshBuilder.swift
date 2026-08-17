@@ -273,17 +273,17 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Photogrammetry-style: ONE photo for the whole tile.
-                // Per-triangle switching is what painted pink/white squares on the Tesla.
-                var triKf: Int? = chunkKf
+                // Small LiDAR tiles (Tesla): one photo. Big wall sheets: per-triangle
+                // so a single garage shot cannot paint the whole wall black.
+                var triKf: Int? = (vCount < 800) ? chunkKf : nil
                 if triKf == nil || projectUV(world: mid, kf: kfs[triKf!]) == nil {
                     var bestScore: Float = -1
                     for (ki, kf) in kfs.enumerated() {
                         let toCam = kf.camPos - mid
                         let dist = simd_length(toCam)
-                        if dist < 0.1 || dist > 4.2 { continue }
+                        if dist < 0.1 || dist > 5.0 { continue }
                         let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
-                        if facing < 0.32 { continue }
+                        if facing < 0.28 { continue }
                         if projectUV(world: mid, kf: kf) == nil { continue }
                         let sharp = Float(max(kf.rgbWidth, 320)) / 640
                         let score = facing * sharp / max(dist, 0.35)
@@ -372,11 +372,6 @@ enum PhotoTexturedMeshBuilder {
                     triUsed += 1
                 }
             }
-        }
-
-        // Real LiDAR depth in the holes mesh never built
-        if !depthPoints.isEmpty, !timedOut() {
-            emitDepthFill(points: depthPoints, pos: &allPos, nrm: &allNrm, col: &allCol, idx: &allIdx)
         }
 
         // LIGHT AI fill — O(verts) with tiny sample set, max ~0.5s
@@ -777,69 +772,6 @@ enum PhotoTexturedMeshBuilder {
             primitiveCount: idx.count / 3, bytesPerIndex: 4
         )
         return SCNGeometry(sources: sources, elements: [element])
-    }
-
-
-
-    /// LiDAR depth samples that landed in empty space → small colored patches.
-    private static func emitDepthFill(
-        points: [ColoredDepthPoint],
-        pos: inout [Float],
-        nrm: inout [Float],
-        col: inout [Float],
-        idx: inout [UInt32]
-    ) {
-        guard points.count > 20, pos.count >= 9 else { return }
-        let s: Float = 0.13
-        func key(_ p: SIMD3<Float>) -> Int64 {
-            let ix = Int64(floor(p.x / s))
-            let iy = Int64(floor(p.y / s))
-            let iz = Int64(floor(p.z / s))
-            return (ix & 0x1FFFFF) << 42 | (iy & 0x1FFFFF) << 21 | (iz & 0x1FFFFF)
-        }
-        var occ = Set<Int64>()
-        occ.reserveCapacity(pos.count / 2)
-        var i = 0
-        while i + 2 < pos.count {
-            occ.insert(key(SIMD3(pos[i], pos[i + 1], pos[i + 2])))
-            i += 3
-        }
-        var buckets: [Int64: (SIMD3<Float>, SIMD3<Float>, Int)] = [:]
-        for p in points {
-            if occ.contains(key(p.position)) { continue }
-            let k = key(p.position)
-            if var e = buckets[k] {
-                e.0 += p.position
-                e.1 += p.color
-                e.2 += 1
-                buckets[k] = e
-            } else {
-                buckets[k] = (p.position, p.color, 1)
-            }
-        }
-        var added = 0
-        let r: Float = 0.055
-        for (_, e) in buckets {
-            guard e.2 >= 2, added < 14_000 else { continue }
-            let inv = 1 / Float(e.2)
-            let c = e.0 * inv
-            if occ.contains(key(c)) { continue }
-            let rgb = e.1 * inv
-            let baseI = UInt32(pos.count / 3)
-            let p0 = c + SIMD3(r, 0, 0)
-            let p1 = c + SIMD3(-r * 0.5, 0, r * 0.86)
-            let p2 = c + SIMD3(-r * 0.5, 0, -r * 0.86)
-            for p in [p0, p1, p2] {
-                pos.append(contentsOf: [p.x, p.y, p.z])
-                nrm.append(contentsOf: [0, 1, 0])
-                col.append(contentsOf: [rgb.x, rgb.y, rgb.z, 1])
-            }
-            idx.append(contentsOf: [baseI, baseI + 1, baseI + 2])
-            added += 1
-        }
-        if added > 0 {
-            print("[EnviroMap] depth-fill patches=\(added)")
-        }
     }
 
     /// Fill small holes only (O(n) loop walk). Never invents walls or cuts the Tesla.
