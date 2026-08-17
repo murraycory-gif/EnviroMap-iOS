@@ -241,7 +241,7 @@ struct MeshSceneView: UIViewRepresentable {
             let cz = (minV.z + maxV.z) * 0.5
             let size = max(maxV.x - minV.x, max(maxV.y - minV.y, maxV.z - minV.z))
             let radius = max(size * 0.5, 0.35)
-            let dist = radius * 2.6
+            let dist = radius * 1.85
 
             // Clear cameras / look constraints
             scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
@@ -249,12 +249,12 @@ struct MeshSceneView: UIViewRepresentable {
             let cam = SCNNode()
             cam.name = "previewCam"
             cam.camera = SCNCamera()
-            cam.camera?.fieldOfView = 48
+            cam.camera?.fieldOfView = 52
             cam.camera?.zNear = 0.01
             cam.camera?.zFar = Double(max(150, radius * 50))
-            // 3/4 view centered on mesh
-            cam.position = SCNVector3(cx + dist * 0.65, cy + dist * 0.4, cz + dist)
-            cam.look(at: SCNVector3(cx, cy, cz))
+            // Eye-level 3/4 — fill the screen (video had the room sitting in the bottom third)
+            cam.position = SCNVector3(cx + dist * 0.55, cy + dist * 0.12, cz + dist)
+            cam.look(at: SCNVector3(cx, cy + radius * 0.05, cz))
             scene.rootNode.addChildNode(cam)
 
             view.pointOfView = cam
