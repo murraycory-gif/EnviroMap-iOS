@@ -273,17 +273,20 @@ enum PhotoTexturedMeshBuilder {
                 let nMid = simd_normalize(n0 + n1 + n2)
 
                 var triKf: Int? = chunkKf
-                var bestD: Float = 9
+                var bestScore: Float = -1
                 for (ki, kf) in kfs.enumerated() {
                     let toCam = kf.camPos - mid
                     let dist = simd_length(toCam)
-                    if dist < 0.1 || dist > 5.5 { continue }
-                    if dist >= bestD { continue }
+                    if dist < 0.1 || dist > 5.0 { continue }
                     let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
-                    if facing < 0.28 { continue }
+                    if facing < 0.32 { continue }
                     if projectUV(world: mid, kf: kf) == nil { continue }
-                    bestD = dist
-                    triKf = ki
+                    let sharp = Float(max(kf.rgbWidth, 320)) / 640
+                    let score = facing * sharp / max(dist, 0.35)
+                    if score > bestScore {
+                        bestScore = score
+                        triKf = ki
+                    }
                 }
                 if let ki = triKf,
                    let u0 = projectUV(world: w0, kf: kfs[ki]),
@@ -1122,35 +1125,16 @@ enum PhotoTexturedMeshBuilder {
         guard !all.isEmpty else { return [] }
         guard all.count > limit else { return all }
 
-        // Always keep recent frames
-        var result: [Keyframe] = []
-        let recentN = min((limit * 2) / 3, all.count)
-        result.append(contentsOf: all.suffix(recentN))
-
-        // Fill remaining with exposure diversity (dark + mid + bright)
-        let older = Array(all.dropLast(recentN))
-        let need = limit - result.count
-        if need > 0, !older.isEmpty {
-            let dark = older.filter { $0.meanLuma < 0.35 }.suffix(need / 3)
-            let bright = older.filter { $0.meanLuma > 0.65 }.suffix(need / 3)
-            let mid = older.filter { $0.meanLuma >= 0.35 && $0.meanLuma <= 0.65 }
-            result.append(contentsOf: dark)
-            result.append(contentsOf: bright)
-            let still = need - dark.count - bright.count
-            if still > 0, !mid.isEmpty {
-                for i in 0..<still {
-                    let idx = i * mid.count / still
-                    result.append(mid[min(idx, mid.count - 1)])
-                }
+        // Sharpest first, then newest
+        let sharp = all.filter { $0.rgbWidth >= 800 }.suffix(limit / 2)
+        var result: [Keyframe] = Array(sharp)
+        for k in all.reversed() {
+            if result.count >= limit { break }
+            if !result.contains(where: { $0.capturedAt == k.capturedAt }) {
+                result.append(k)
             }
         }
-        // Dedupe by timestamp
-        var seen = Set<TimeInterval>()
-        var unique: [Keyframe] = []
-        for k in result {
-            if seen.insert(k.capturedAt).inserted { unique.append(k) }
-        }
-        return unique
+        return result
     }
 
     struct CameraSnap {

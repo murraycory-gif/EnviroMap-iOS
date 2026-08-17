@@ -1,21 +1,21 @@
 import Foundation
 
-/// AH coverage · raw high-res camera color for a clear picture.
+/// Coverage from BL/BN · sharper photos for clarity.
 enum MeshDensityConfig {
     static var highDetail: Bool {
         UserDefaults.standard.object(forKey: "enviromap.scan.highDetail") as? Bool ?? true
     }
 
     static func keyframeInterval(movingFast: Bool) -> TimeInterval {
-        // ~2–3 photos/sec. Faster than this retains ARFrames and kills SLAM.
-        movingFast ? 0.38 : 0.55
+        movingFast ? 0.42 : 0.60
     }
 
-    static var maxKeyframes: Int { 72 }
+    static var maxKeyframes: Int { 64 }
     static var maxChunks: Int { 12_000 }
 
-    static var liveKeyframeMaxWidth: Int { 480 }
-    static var keyframeMaxWidth: Int { 1280 }
+    static var liveKeyframeMaxWidth: Int { 640 }
+    static var sharpKeyframeMaxWidth: Int { 960 }
+    static var keyframeMaxWidth: Int { 1440 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }
     static var meshCopyInterval: TimeInterval { 999 }
@@ -26,7 +26,7 @@ enum MeshDensityConfig {
 
     static var finalVertexSoftCap: Int { 3_500_000 }
     static var triangleBudget: Int { highDetail ? 1_400_000 : 800_000 }
-    static var bakeKeyframeLimit: Int { 36 }
+    static var bakeKeyframeLimit: Int { 48 }
     static var samplesPerTriangle: Int { 1 }
     static var quantizeShift: Int { 2 }
 

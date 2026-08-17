@@ -1386,7 +1386,12 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         if kfBusy { return }
         kfBusy = true
         defer { kfBusy = false }
-        storeKeyframe(from: frame, maxWidth: MeshDensityConfig.liveKeyframeMaxWidth)
+        // Every 5th live photo is sharper so the Tesla paint stays readable
+        let n = keyframes.count
+        let w = (n % 5 == 0)
+            ? MeshDensityConfig.sharpKeyframeMaxWidth
+            : MeshDensityConfig.liveKeyframeMaxWidth
+        storeKeyframe(from: frame, maxWidth: w)
     }
 
     private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
