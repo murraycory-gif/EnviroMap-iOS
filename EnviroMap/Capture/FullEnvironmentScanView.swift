@@ -375,7 +375,7 @@ struct PreviewMeshView: UIViewRepresentable {
         v.allowsCameraControl = true
         v.autoenablesDefaultLighting = true
         v.antialiasingMode = .multisampling2X
-        v.preferredFramesPerSecond = 30
+        v.preferredFramesPerSecond = 60
         v.isPlaying = true
         v.rendersContinuously = true
         v.defaultCameraController.interactionMode = .orbitTurntable
@@ -777,7 +777,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         scn.automaticallyUpdatesLighting = true
         scn.scene = SCNScene()
         scn.rendersCameraGrain = false
-        scn.preferredFramesPerSecond = 30
+        scn.preferredFramesPerSecond = 60
         scn.contentScaleFactor = min(UIScreen.main.scale, 2.0) // less GPU mid-scan
         scn.delegate = self
         // Yellow feature points + we'll add blue mesh lines for coverage
@@ -838,15 +838,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         let config = ARWorldTrackingConfiguration()
         // Dense LiDAR mesh of everything (not RoomPlan walls-only)
-        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
-            config.sceneReconstruction = .meshWithClassification
-        } else {
-            config.sceneReconstruction = .mesh
-        }
-        config.environmentTexturing = .automatic
-        // Plane detection optional — mesh recon is what we need
+        // .mesh = more geometry, less CPU than classification (we don't use labels)
+        config.sceneReconstruction = .mesh
+        config.environmentTexturing = .none
         config.planeDetection = [.horizontal, .vertical]
-        config.isLightEstimationEnabled = true
+        config.isLightEstimationEnabled = false
         config.providesAudioData = false
         // Better outdoor/indoor auto exposure when device supports it
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
@@ -901,7 +897,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         if Thread.isMainThread {
             kick()
         } else {
-            Thread.sleep(forTimeInterval: 0.20)
+            Thread.sleep(forTimeInterval: 0.45)
             DispatchQueue.main.async(execute: kick)
         }
 
@@ -1049,11 +1045,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func applyBlueWire(node: SCNNode, mesh: ARMeshAnchor) {
-        // Smooth blue mapping mesh (3D Snap style) — subsampled lines only
-        guard showBlueMesh else {
-            node.geometry = nil
-            return
-        }
+        // Never nil the node — that hid coverage. Leave ARKit's live mesh.
+        guard showBlueMesh else { return }
         guard let geom = Self.wireGeometry(mesh.geometry) else { return }
         node.geometry = geom
     }
