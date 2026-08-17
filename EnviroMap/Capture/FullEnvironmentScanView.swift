@@ -500,14 +500,14 @@ struct PreviewMeshView: UIViewRepresentable {
             // Remove old cameras
             scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
 
-            let dist = radius * 2.8
+            let dist = radius * 1.85
             let cam = SCNNode()
             cam.name = "previewCam"
             cam.camera = SCNCamera()
-            cam.camera?.fieldOfView = 55
+            cam.camera?.fieldOfView = 52
             cam.camera?.zNear = 0.01
             cam.camera?.zFar = Double(max(100, radius * 50))
-            cam.position = SCNVector3(center.x + dist * 0.6, center.y + dist * 0.45, center.z + dist)
+            cam.position = SCNVector3(center.x + dist * 0.55, center.y + dist * 0.12, center.z + dist)
             let constraint = SCNLookAtConstraint(target: mesh)
             constraint.isGimbalLockEnabled = true
             cam.constraints = [constraint]
