@@ -686,8 +686,8 @@ final class FullEnvironmentScanModel: ObservableObject {
                     let mc = self.meshChunks
                     self.phase = .failed(
                         mc == 0
-                        ? "No Mesh Captured. Walk Around Your Space Until Coverage Looks Full, Then Tap Finish."
-                        : "Could Not Build The 3D View. Try Walking All Sides Once More."
+                        ? "No Mesh Captured. Walk Around Your Space, Then Tap Finish."
+                        : "Could Not Save The Mesh. Walk A Slow Circle And Tap Finish Again."
                     )
                 }
             }
@@ -865,8 +865,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     func stopCapturing() {
-        // Stop live keyframes only — harvest runs once on background queue
-        isRunning = false
+        // Keep ARSession running — harvest copies mesh from the next live frames.
+        // isRunning stays true until harvest finishes.
     }
 
     func stop() {
@@ -876,75 +876,104 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
     func snapshot() -> UIImage? { arView?.snapshot() }
 
+    private let harvestLock = NSLock()
+    private var harvestNeeded = 0
+    private var harvestDone: DispatchSemaphore?
+
     func forceFinalHarvest() {
-        // MUST touch ARSession / ARMeshAnchor on main — background access drops tiles
-        // and caused the "one jagged depth slice" regression.
-        if Thread.isMainThread {
-            self._forceFinalHarvestOnMain()
-        } else {
-            DispatchQueue.main.sync { [weak self] in
-                self?._forceFinalHarvestOnMain()
+        // Copy mesh from LIVE session callbacks (only place ARMesh buffers are valid).
+        let sem = DispatchSemaphore(value: 0)
+        harvestLock.lock()
+        harvestDone = sem
+        harvestNeeded = 6
+        harvestLock.unlock()
+
+        // Kick one pull immediately if a frame is handy (main or not)
+        let kick = {
+            if let frame = self.arView?.session.currentFrame {
+                self.harvestFromFrame(frame)
             }
         }
-    }
+        if Thread.isMainThread { kick() }
+        else { DispatchQueue.main.async(execute: kick) }
 
-    private func _forceFinalHarvestOnMain() {
-        guard let session = arView?.session else { return }
+        // Wait up to 8s for 6 live pulls
+        _ = sem.wait(timeout: .now() + 8.0)
 
-        func pull(from frame: ARFrame) -> [UUID: CapturedMeshChunk] {
-            var fresh: [UUID: CapturedMeshChunk] = [:]
-            for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
-                if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
-                    fresh[chunk.id] = chunk
-                }
-            }
-            return fresh
-        }
+        harvestLock.lock()
+        harvestNeeded = 0
+        harvestDone = nil
+        harvestLock.unlock()
 
-        func merge(_ into: inout [UUID: CapturedMeshChunk], _ extra: [UUID: CapturedMeshChunk]) {
-            for (id, chunk) in extra {
-                if let old = into[id],
-                   old.positions.count >= chunk.positions.count,
-                   old.indices.count >= chunk.indices.count {
-                    continue
-                }
-                into[id] = chunk
-            }
-        }
-
+        // Last-ditch if we still have no tiles
         stateLock.lock()
-        var all = chunks
+        let empty = chunks.isEmpty
         stateLock.unlock()
-
-        // 12 densify passes — ARKit mesh only (depth fusion removed: it wiped the room)
-        for pass in 0..<12 {
-            if let frame = session.currentFrame {
-                ingestKeyframe(from: frame, highRes: true)
-                merge(&all, pull(from: frame))
-                if pass == 0 || pass == 5 || pass == 11 {
-                    ingestDepthPoints(from: frame, dense: true)
+        if empty {
+            let extra = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async {
+                if let frame = self.arView?.session.currentFrame {
+                    var fresh: [UUID: CapturedMeshChunk] = [:]
+                    for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
+                        if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
+                            fresh[chunk.id] = chunk
+                        }
+                    }
+                    self.stateLock.lock()
+                    for (id, c) in fresh { self.chunks[id] = c }
+                    self.stateLock.unlock()
                 }
+                extra.signal()
             }
-            if pass < 11 {
-                // Runloop spin so ARKit can densify without sleeping the main thread hard
-                let until = Date().addingTimeInterval(0.12)
-                while Date() < until {
-                    RunLoop.current.run(mode: .default, before: until)
-                }
-            }
-        }
-        if let frame = session.currentFrame {
-            merge(&all, pull(from: frame))
-            ingestKeyframe(from: frame, highRes: true)
-            ingestDepthPoints(from: frame, dense: true)
+            _ = extra.wait(timeout: .now() + 2.0)
         }
 
         stateLock.lock()
-        chunks = all
         let total = chunks.count
         let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
         stateLock.unlock()
         print("[EnviroMap] harvest tiles=\(total) verts=\(verts)")
+    }
+
+    /// Called from session(didUpdate:) while buffers are valid.
+    private func harvestFromFrame(_ frame: ARFrame) {
+        harvestLock.lock()
+        let need = harvestNeeded
+        harvestLock.unlock()
+        guard need > 0 else { return }
+
+        var fresh: [UUID: CapturedMeshChunk] = [:]
+        for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
+            if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
+                fresh[chunk.id] = chunk
+            }
+        }
+        ingestKeyframe(from: frame, highRes: true)
+        if need == 6 || need == 3 || need == 1 {
+            ingestDepthPoints(from: frame, dense: true)
+        }
+
+        stateLock.lock()
+        for (id, chunk) in fresh {
+            if let old = chunks[id],
+               old.positions.count >= chunk.positions.count,
+               old.indices.count >= chunk.indices.count {
+                continue
+            }
+            chunks[id] = chunk
+        }
+        let got = chunks.count
+        stateLock.unlock()
+
+        harvestLock.lock()
+        harvestNeeded = max(0, harvestNeeded - 1)
+        let leftover = harvestNeeded
+        let sem = harvestDone
+        harvestLock.unlock()
+        print("[EnviroMap] harvest pull leftover=\(leftover) tiles=\(got)")
+        if leftover == 0 {
+            sem?.signal()
+        }
     }
 
     func buildExportFast() -> FullEnvironmentScanModel.ExportPayload? {
@@ -1136,7 +1165,10 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     // MARK: ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        guard isRunning else { return }
+        harvestLock.lock()
+        let harvesting = harvestNeeded > 0
+        harvestLock.unlock()
+        guard isRunning || harvesting else { return }
         let ts = frame.timestamp
 
         // Count only — never copy mesh geometry here (that froze mid-scan)
@@ -1152,6 +1184,14 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             moving = simd_length(pos - prev) > 0.012
         }
         lastCamPos = pos
+
+        // Finish harvest — copy mesh NOW while geometry buffers are valid
+        harvestLock.lock()
+        let needHarvest = harvestNeeded > 0
+        harvestLock.unlock()
+        if needHarvest {
+            harvestFromFrame(frame)
+        }
 
         // Color frames — light + capped (do not retain ARFrame)
         let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
