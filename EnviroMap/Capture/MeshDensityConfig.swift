@@ -7,13 +7,13 @@ enum MeshDensityConfig {
     }
 
     static func keyframeInterval(movingFast: Bool) -> TimeInterval {
-        movingFast ? 0.10 : 0.15
+        movingFast ? 0.14 : 0.20
     }
 
-    static var maxKeyframes: Int { 80 }
+    static var maxKeyframes: Int { 72 }
     static var maxChunks: Int { 12_000 }
 
-    static var liveKeyframeMaxWidth: Int { 1280 }
+    static var liveKeyframeMaxWidth: Int { 720 }
     static var keyframeMaxWidth: Int { 1280 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }

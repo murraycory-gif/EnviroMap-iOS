@@ -243,7 +243,7 @@ enum PhotoTexturedMeshBuilder {
                 }
                 // Subdivide large faces once for sharper color (fewer blurry panels)
                 let edge = max(simd_length(w1 - w0), max(simd_length(w2 - w1), simd_length(w0 - w2)))
-                if edge > 0.04, triUsed < triBudget {
+                if edge > 0.035, triUsed < triBudget {
                     let m01 = (w0 + w1) * 0.5
                     let m12 = (w1 + w2) * 0.5
                     let m20 = (w2 + w0) * 0.5
@@ -472,13 +472,14 @@ enum PhotoTexturedMeshBuilder {
             }
             let viewDir = toCam / max(dist, 1e-4)
             let facing = abs(simd_dot(normal, viewDir))
-            if facing < 0.04 { continue }
+            if facing < 0.18 { continue } // skip glance / reflection views (purple smear)
             let view = kf.camera.viewMatrix(for: kf.orientation) * SIMD4<Float>(world.x, world.y, world.z, 1)
-            if view.z > -0.03 { continue }
+            if view.z > -0.05 { continue }
             guard let uv = projectUV(world: world, kf: kf) else { continue }
             guard let c = sampleBilinear(kf, u: uv.x, v: uv.y) else { continue }
+            let luma = (Float(c.0) + Float(c.1) + Float(c.2)) / (3 * 255)
+            if luma > 0.93, facing < 0.45 { continue } // skip blown specular
             let center = (1 - abs(uv.x - 0.5)) * (1 - abs(uv.y - 0.5))
-            // Closest sharp view wins — that's what made Build O look like the real car
             let w = Float(facing * facing) * (1 / max(dist * dist, 0.04)) * (0.35 + 0.65 * center)
             if w > bestW {
                 bestW = w
@@ -921,7 +922,8 @@ enum PhotoTexturedMeshBuilder {
         maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
     ) -> Keyframe? {
         let cap = min(maxWidth, MeshDensityConfig.keyframeMaxWidth)
-        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap) else { return nil }
+        let useBox = cap >= 1000
+        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap, boxFilter: useBox) else { return nil }
 
         // Raw camera color — no global levels (those washed detail)
         let mean = lumaMean(rgb, width: w, height: h)
@@ -1002,7 +1004,7 @@ enum PhotoTexturedMeshBuilder {
         return mean
     }
 
-    private static func extractRGB(buffer: CVPixelBuffer, maxWidth: Int) -> ([UInt8], Int, Int)? {
+    private static func extractRGB(buffer: CVPixelBuffer, maxWidth: Int, boxFilter: Bool = false) -> ([UInt8], Int, Int)? {
         let fullW = CVPixelBufferGetWidth(buffer)
         let fullH = CVPixelBufferGetHeight(buffer)
         guard fullW > 1, fullH > 1 else { return nil }
@@ -1029,14 +1031,18 @@ enum PhotoTexturedMeshBuilder {
                 let sy = min(Int((CGFloat(j) / max(scale, 0.0001)).rounded(.down)), fullH - 1)
                 for i in 0..<w {
                     let sx = min(Int((CGFloat(i) / max(scale, 0.0001)).rounded(.down)), fullW - 1)
-                    // 2x2 box on Y — less blocky than nearest
-                    let sx1 = min(sx + 1, fullW - 1)
-                    let sy1 = min(sy + 1, fullH - 1)
-                    let Y0 = Float(yBase.advanced(by: sy * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
-                    let Y1 = Float(yBase.advanced(by: sy * yStride + sx1).assumingMemoryBound(to: UInt8.self).pointee)
-                    let Y2 = Float(yBase.advanced(by: sy1 * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
-                    let Y3 = Float(yBase.advanced(by: sy1 * yStride + sx1).assumingMemoryBound(to: UInt8.self).pointee)
-                    let Y = (Y0 + Y1 + Y2 + Y3) * 0.25
+                    let Y: Float
+                    if boxFilter {
+                        let sx1 = min(sx + 1, fullW - 1)
+                        let sy1 = min(sy + 1, fullH - 1)
+                        let Y0 = Float(yBase.advanced(by: sy * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
+                        let Y1 = Float(yBase.advanced(by: sy * yStride + sx1).assumingMemoryBound(to: UInt8.self).pointee)
+                        let Y2 = Float(yBase.advanced(by: sy1 * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
+                        let Y3 = Float(yBase.advanced(by: sy1 * yStride + sx1).assumingMemoryBound(to: UInt8.self).pointee)
+                        Y = (Y0 + Y1 + Y2 + Y3) * 0.25
+                    } else {
+                        Y = Float(yBase.advanced(by: sy * yStride + sx).assumingMemoryBound(to: UInt8.self).pointee)
+                    }
                     let cPtr = cBase.advanced(by: (sy / 2) * cStride + (sx / 2) * 2).assumingMemoryBound(to: UInt8.self)
                     let Cb = Float(cPtr[0]) - 128
                     let Cr = Float(cPtr[1]) - 128

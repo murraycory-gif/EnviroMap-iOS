@@ -936,6 +936,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             chunks[id] = chunk
         }
         stateLock.unlock()
+        // One high-res color frame at Finish (not during walk — that retained ARFrames)
+        ingestKeyframe(from: frame, highRes: true)
     }
 
     private func harvestFromFrame(_ frame: ARFrame) {
