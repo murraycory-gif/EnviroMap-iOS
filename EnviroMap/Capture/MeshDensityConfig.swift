@@ -13,7 +13,7 @@ enum MeshDensityConfig {
     static var maxKeyframes: Int { 72 }
     static var maxChunks: Int { 12_000 }
 
-    static var liveKeyframeMaxWidth: Int { 960 }
+    static var liveKeyframeMaxWidth: Int { 640 }
     static var keyframeMaxWidth: Int { 1280 }
 
     static var liveMeshCopyUntilChunks: Int { 0 }

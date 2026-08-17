@@ -310,6 +310,7 @@ enum PhotoTexturedMeshBuilder {
                         let c = pushTex(w2, n2, u2)
                         texIdx[ki].append(contentsOf: [a, bb, c])
                         triUsed += 1
+                        texTris += 1
                         continue
                     }
                 }
@@ -1086,36 +1087,31 @@ enum PhotoTexturedMeshBuilder {
         return unique
     }
 
-    static func makeKeyframe(
-        from frame: ARFrame,
-        orientation: UIInterfaceOrientation,
-        viewport: CGSize,
-        maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
-    ) -> Keyframe? {
-        let cap = min(maxWidth, MeshDensityConfig.keyframeMaxWidth)
-        let useBox = cap >= 1000
-        guard let (rgb, w, h) = extractRGB(buffer: frame.capturedImage, maxWidth: cap, boxFilter: useBox) else { return nil }
+    struct CameraSnap {
+        let timestamp: TimeInterval
+        let orientation: UIInterfaceOrientation
+        let viewport: CGSize
+        let displayTransform: CGAffineTransform
+        let camPos: SIMD3<Float>
+        let view: simd_float4x4
+        let proj: simd_float4x4
+        let worldToCam: simd_float4x4
+        let fx: Float
+        let fy: Float
+        let cx: Float
+        let cy: Float
+        let imgW: Float
+        let imgH: Float
+    }
 
-        // Raw camera color — no global levels (those washed detail)
-        let mean = lumaMean(rgb, width: w, height: h)
-
+    static func snapCamera(from frame: ARFrame, orientation: UIInterfaceOrientation, viewport: CGSize) -> CameraSnap {
         let cam = frame.camera
-        let camPos = SIMD3<Float>(
-            cam.transform.columns.3.x,
-            cam.transform.columns.3.y,
-            cam.transform.columns.3.z
-        )
-        return Keyframe(
+        return CameraSnap(
+            timestamp: frame.timestamp,
             orientation: orientation,
             viewport: viewport,
             displayTransform: frame.displayTransform(for: orientation, viewportSize: viewport),
-            capturedAt: frame.timestamp,
-            rgb: rgb,
-            rgbWidth: w,
-            rgbHeight: h,
-            camPos: camPos,
-            image: UIImage(),
-            meanLuma: mean,
+            camPos: SIMD3(cam.transform.columns.3.x, cam.transform.columns.3.y, cam.transform.columns.3.z),
             view: cam.viewMatrix(for: orientation),
             proj: cam.projectionMatrix(for: orientation, viewportSize: viewport, zNear: 0.01, zFar: 80),
             worldToCam: cam.transform.inverse,
@@ -1126,6 +1122,47 @@ enum PhotoTexturedMeshBuilder {
             imgW: Float(CVPixelBufferGetWidth(frame.capturedImage)),
             imgH: Float(CVPixelBufferGetHeight(frame.capturedImage))
         )
+    }
+
+    static func makeKeyframe(
+        buffer: CVPixelBuffer,
+        snap: CameraSnap,
+        maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
+    ) -> Keyframe? {
+        let cap = min(maxWidth, MeshDensityConfig.keyframeMaxWidth)
+        let useBox = cap >= 1000
+        guard let (rgb, w, h) = extractRGB(buffer: buffer, maxWidth: cap, boxFilter: useBox) else { return nil }
+        let mean = lumaMean(rgb, width: w, height: h)
+        return Keyframe(
+            orientation: snap.orientation,
+            viewport: snap.viewport,
+            displayTransform: snap.displayTransform,
+            capturedAt: snap.timestamp,
+            rgb: rgb,
+            rgbWidth: w,
+            rgbHeight: h,
+            camPos: snap.camPos,
+            image: UIImage(),
+            meanLuma: mean,
+            view: snap.view,
+            proj: snap.proj,
+            worldToCam: snap.worldToCam,
+            fx: snap.fx,
+            fy: snap.fy,
+            cx: snap.cx,
+            cy: snap.cy,
+            imgW: snap.imgW,
+            imgH: snap.imgH
+        )
+    }
+
+    static func makeKeyframe(
+        from frame: ARFrame,
+        orientation: UIInterfaceOrientation,
+        viewport: CGSize,
+        maxWidth: Int = MeshDensityConfig.keyframeMaxWidth
+    ) -> Keyframe? {
+        makeKeyframe(buffer: frame.capturedImage, snap: snapCamera(from: frame, orientation: orientation, viewport: viewport), maxWidth: maxWidth)
     }
 
     /// Lift shadows in dark frames; tame whites in bright outdoor frames.

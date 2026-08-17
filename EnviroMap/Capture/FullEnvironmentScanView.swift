@@ -757,6 +757,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var depthBusy = false
     private var lastBankIdTime: [UUID: TimeInterval] = [:]
     private var lastCamPos: SIMD3<Float>?
+    private var kfBusy = false
     private var lastStatsEmit: TimeInterval = 0
     private var maxKeyframes: Int { min(56, MeshDensityConfig.maxKeyframes) }
     private var maxChunks: Int { MeshDensityConfig.maxChunks }
@@ -1178,22 +1179,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             autoreleasepool { ingestKeyframe(from: frame, highRes: false) }
         }
 
-        // Bank only NEW tiles (max 2/frame) so walking fills more without freezing
-        var newBanked = 0
-        for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
-            stateLock.lock()
-            let known = chunks[mesh.identifier] != nil
-            stateLock.unlock()
-            if known { continue }
-            if let chunk = Self.copyChunk(from: mesh, fullQuality: false, liveBank: true) {
-                stateLock.lock()
-                chunks[chunk.id] = chunk
-                stateLock.unlock()
-                newBanked += 1
-                if newBanked >= 2 { break }
-            }
-        }
-
         // Stats only
         if ts - lastStatsEmit >= 0.45 {
             stateLock.lock()
@@ -1294,110 +1279,39 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     }
 
     private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
-        // Skip if already at cap — avoid peak memory during long scans
+        // NEVER decode RGB on the AR callback — that retains 12 ARFrames and kills LiDAR.
+        if kfBusy { return }
         stateLock.lock()
         let atCap = keyframes.count >= maxKeyframes
         stateLock.unlock()
-        if atCap {
-            stateLock.lock()
-            if !keyframes.isEmpty { keyframes.removeFirst() }
-            stateLock.unlock()
-        }
 
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
-        // Live: smaller for smooth scan. Finish: full res for clear color.
         let width = highRes
             ? MeshDensityConfig.keyframeMaxWidth
             : MeshDensityConfig.liveKeyframeMaxWidth
-        guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
-            from: frame,
-            orientation: orientation,
-            viewport: viewport,
-            maxWidth: width
-        ) else { return }
-
-        stateLock.lock()
-        keyframes.append(kf)
-        if keyframes.count > maxKeyframes {
-            keyframes.removeFirst(keyframes.count - maxKeyframes)
-        }
-        stateLock.unlock()
-    }
-
-    private func emitStats(meshCount: Int, frameCount: Int) {
-        let now = CACurrentMediaTime()
-        if now - lastStatsEmit < 0.55 { return }
-        lastStatsEmit = now
-        // Always hop to main — ARSession may call from a background queue
-        if Thread.isMainThread {
-            onStats?(meshCount, frameCount)
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                self?.onStats?(meshCount, frameCount)
+        let snap = PhotoTexturedMeshBuilder.snapCamera(from: frame, orientation: orientation, viewport: viewport)
+        let buf = frame.capturedImage
+        CVPixelBufferRetain(buf)
+        kfBusy = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            defer {
+                CVPixelBufferRelease(buf)
+                self?.kfBusy = false
             }
-        }
-    }
-
-    /// Deep-copy mesh buffers while the anchor is valid (during this callback only).
-
-    private func noteClassification(from mesh: ARMeshAnchor) {
-        guard aiCoachEnabled else { return }
-        let now = CACurrentMediaTime()
-        if now - lastClassNoteTime < 1.5 { return }
-        lastClassNoteTime = now
-        // ARMeshClassification via geometry if available (iOS 14+)
-        let g = mesh.geometry
-        // faces with classification - optional path
-        // Use bounding box heuristic as AI assist fallback
-        let t = mesh.transform
-        let y = t.columns.3.y
-        if y < 0.35 {
-            classCounts["floor", default: 0] += 1
-        } else if y > 1.8 {
-            classCounts["ceiling", default: 0] += 1
-        } else {
-            classCounts["wall", default: 0] += 1
-        }
-        _ = g
-    }
-
-
-    /// Merge pre-copied chunks (already deep-copied on session thread)
-    private func mergeDensestChunks(_ updates: [CapturedMeshChunk]) {
-        guard !updates.isEmpty else { return }
-        stateLock.lock()
-        for chunk in updates {
-            if let old = chunks[chunk.id],
-               old.positions.count >= chunk.positions.count,
-               old.indices.count >= chunk.indices.count {
-                continue
+            guard let self else { return }
+            guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(buffer: buf, snap: snap, maxWidth: width) else { return }
+            self.stateLock.lock()
+            if atCap, !self.keyframes.isEmpty { self.keyframes.removeFirst() }
+            self.keyframes.append(kf)
+            if self.keyframes.count > self.maxKeyframes {
+                self.keyframes.removeFirst(self.keyframes.count - self.maxKeyframes)
             }
-            chunks[chunk.id] = chunk
+            self.stateLock.unlock()
         }
-        if chunks.count > maxChunks {
-            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
-            var keep: [UUID: CapturedMeshChunk] = [:]
-            for c in ranked.prefix(maxChunks) { keep[c.id] = c }
-            chunks = keep
-        }
-        // Memory guard during long scans
-        let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
-        if verts > 1_800_000 {
-            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
-            var keep: [UUID: CapturedMeshChunk] = [:]
-            var v = 0
-            for c in ranked {
-                if v > 1_400_000 { break }
-                keep[c.id] = c
-                v += c.positions.count
-            }
-            chunks = keep
-        }
-        stateLock.unlock()
     }
 
-    /// Sample scene depth + camera color into a voxel grid (fills mesh holes)
+
     private func ingestDepthPoints(from frame: ARFrame, dense: Bool = false) {
         guard let depthMap = frame.sceneDepth?.depthMap else { return }
         let cam = frame.camera
