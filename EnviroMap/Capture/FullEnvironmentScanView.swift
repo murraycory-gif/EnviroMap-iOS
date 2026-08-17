@@ -1278,6 +1278,68 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
     }
 
+
+    private func emitStats(meshCount: Int, frameCount: Int) {
+        let now = CACurrentMediaTime()
+        if now - lastStatsEmit < 0.55 { return }
+        lastStatsEmit = now
+        if Thread.isMainThread {
+            onStats?(meshCount, frameCount)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.onStats?(meshCount, frameCount)
+            }
+        }
+    }
+
+    private func noteClassification(from mesh: ARMeshAnchor) {
+        guard aiCoachEnabled else { return }
+        let now = CACurrentMediaTime()
+        if now - lastClassNoteTime < 1.5 { return }
+        lastClassNoteTime = now
+        let t = mesh.transform
+        let y = t.columns.3.y
+        if y < 0.35 {
+            classCounts["floor", default: 0] += 1
+        } else if y > 1.8 {
+            classCounts["ceiling", default: 0] += 1
+        } else {
+            classCounts["wall", default: 0] += 1
+        }
+    }
+
+    private func mergeDensestChunks(_ updates: [CapturedMeshChunk]) {
+        guard !updates.isEmpty else { return }
+        stateLock.lock()
+        for chunk in updates {
+            if let old = chunks[chunk.id],
+               old.positions.count >= chunk.positions.count,
+               old.indices.count >= chunk.indices.count {
+                continue
+            }
+            chunks[chunk.id] = chunk
+        }
+        if chunks.count > maxChunks {
+            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
+            var keep: [UUID: CapturedMeshChunk] = [:]
+            for c in ranked.prefix(maxChunks) { keep[c.id] = c }
+            chunks = keep
+        }
+        let verts = chunks.values.reduce(0) { $0 + $1.positions.count }
+        if verts > 1_800_000 {
+            let ranked = chunks.values.sorted { $0.positions.count > $1.positions.count }
+            var keep: [UUID: CapturedMeshChunk] = [:]
+            var v = 0
+            for c in ranked {
+                if v > 1_400_000 { break }
+                keep[c.id] = c
+                v += c.positions.count
+            }
+            chunks = keep
+        }
+        stateLock.unlock()
+    }
+
     private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
         // NEVER decode RGB on the AR callback — that retains 12 ARFrames and kills LiDAR.
         if kfBusy { return }
@@ -1292,13 +1354,9 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             : MeshDensityConfig.liveKeyframeMaxWidth
         let snap = PhotoTexturedMeshBuilder.snapCamera(from: frame, orientation: orientation, viewport: viewport)
         let buf = frame.capturedImage
-        CVPixelBufferRetain(buf)
         kfBusy = true
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            defer {
-                CVPixelBufferRelease(buf)
-                self?.kfBusy = false
-            }
+            defer { self?.kfBusy = false }
             guard let self else { return }
             guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(buffer: buf, snap: snap, maxWidth: width) else { return }
             self.stateLock.lock()
