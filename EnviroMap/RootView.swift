@@ -3,8 +3,8 @@ import UIKit
 
 // MARK: - Root
 // Flow (first install):
-//   1) Dark system launch (solid color only)
-//   2) Splash — logo + EnviroMap name
+//   1) Light system launch (same as Home)
+//   2) Splash — big logo + EnviroMap name
 //   3) Onboarding intro pages
 //   4) Main hub
 // Returning users skip 3 after they finish intro once.
@@ -12,15 +12,12 @@ import UIKit
 struct RootView: View {
     @EnvironmentObject private var store: SessionStore
 
-    // Bump key so first-login intro shows again after launch-screen experiments
     @AppStorage("enviromap.onboarding.completed.v3") private var onboardingCompleted = false
     @State private var showSplash = true
 
-    private let launchDark = Color(red: 0.06, green: 0.10, blue: 0.22)
-
     var body: some View {
         ZStack {
-            launchDark.ignoresSafeArea()
+            AppTheme.bg.ignoresSafeArea()
 
             if showSplash {
                 LaunchSplashView()
@@ -39,11 +36,10 @@ struct RootView: View {
                     .zIndex(1)
             }
         }
-        .preferredColorScheme(showSplash || !onboardingCompleted ? .dark : .light)
+        .preferredColorScheme(showSplash || onboardingCompleted ? .light : .dark)
         .tint(AppTheme.blue)
-        .background(launchDark.ignoresSafeArea())
+        .background(AppTheme.bg.ignoresSafeArea())
         .onAppear {
-            // Brief branded splash, then intro or home
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
                 withAnimation(.easeInOut(duration: 0.4)) {
                     showSplash = false
@@ -53,7 +49,7 @@ struct RootView: View {
     }
 }
 
-// MARK: - Splash (dark blue + transparent logo + name)
+// MARK: - Splash (Home light theme, large logo)
 
 struct LaunchSplashView: View {
     private let markName = "EnviroMapMark"
@@ -62,30 +58,25 @@ struct LaunchSplashView: View {
 
     var body: some View {
         ZStack {
+            AppTheme.bg.ignoresSafeArea()
             LinearGradient(
                 colors: [
-                    Color(red: 0.06, green: 0.10, blue: 0.22),
-                    Color(red: 0.10, green: 0.18, blue: 0.42),
-                    Color(red: 0.05, green: 0.08, blue: 0.18),
+                    AppTheme.blue.opacity(0.14),
+                    AppTheme.blueSoft.opacity(0.55),
+                    AppTheme.bg,
                 ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+                startPoint: .top,
+                endPoint: .bottom
             )
             .ignoresSafeArea()
 
             Circle()
-                .fill(AppTheme.blue.opacity(0.28))
-                .frame(width: 320, height: 320)
+                .fill(AppTheme.blue.opacity(0.16))
+                .frame(width: 420, height: 420)
                 .blur(radius: 70)
-                .offset(y: -40)
+                .offset(y: -20)
 
-            Circle()
-                .fill(Color(red: 0.3, green: 0.55, blue: 1.0).opacity(0.14))
-                .frame(width: 260, height: 260)
-                .blur(radius: 50)
-                .offset(x: 80, y: 180)
-
-            VStack(spacing: 22) {
+            VStack(spacing: 28) {
                 Group {
                     if let ui = UIImage(named: markName)?.withRenderingMode(.alwaysOriginal) {
                         Image(uiImage: ui)
@@ -99,7 +90,7 @@ struct LaunchSplashView: View {
                             .scaledToFit()
                     } else {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 36, style: .continuous)
+                            RoundedRectangle(cornerRadius: 48, style: .continuous)
                                 .fill(
                                     LinearGradient(
                                         colors: [AppTheme.blue, AppTheme.blueDeep],
@@ -108,38 +99,35 @@ struct LaunchSplashView: View {
                                     )
                                 )
                             Image(systemName: "cube.transparent.fill")
-                                .font(.system(size: 72, weight: .semibold))
+                                .font(.system(size: 120, weight: .semibold))
                                 .foregroundStyle(.white)
                         }
                     }
                 }
-                .frame(width: 160, height: 160)
-                .shadow(color: AppTheme.blue.opacity(0.4), radius: 24, y: 10)
+                .frame(width: 280, height: 280)
+                .shadow(color: AppTheme.blue.opacity(0.28), radius: 28, y: 12)
                 .scaleEffect(appear ? 1 : 0.92)
                 .opacity(appear ? 1 : 0.9)
 
-                VStack(spacing: 6) {
+                VStack(spacing: 8) {
                     HStack(spacing: 0) {
                         Text("Enviro")
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.text)
                         Text("Map")
                             .foregroundStyle(
                                 LinearGradient(
-                                    colors: [
-                                        Color(red: 0.55, green: 0.78, blue: 1.0),
-                                        Color(red: 0.35, green: 0.62, blue: 1.0),
-                                    ],
+                                    colors: [AppTheme.blue, AppTheme.blueDeep],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
                             )
                     }
-                    .font(.system(size: 42, weight: .bold, design: .rounded))
+                    .font(.system(size: 48, weight: .bold, design: .rounded))
                     .tracking(-1.2)
 
                     Text("Map · Measure · Design")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(AppTheme.textSecondary)
                 }
             }
         }
