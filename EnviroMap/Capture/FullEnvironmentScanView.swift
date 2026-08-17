@@ -954,7 +954,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             let w = snap.w, h = snap.h
             guard max(w, h) >= 0.35 else { continue }
             let isWall = snap.align == .vertical
-            let isCeil = snap.align == .horizontal && snap.origin.y > 1.4
+            let isCeil = snap.align == .horizontal && snap.origin.y > 1.85 && max(w, h) >= 1.2
             guard isWall || isCeil else { continue }
             guard let raw = Self.makeExtentWall(id: pid, transform: snap.t, width: w, height: h, center: snap.center) else { continue }
             var n = SIMD3<Float>(snap.t.columns.1.x, snap.t.columns.1.y, snap.t.columns.1.z)
@@ -974,11 +974,8 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 walls[clipped.id] = clipped
             }
         }
-        // Always close the room — back wall / sides / ceiling from the FULL walk, not just the Tesla
-        let roomBounds = Self.walkBounds(mesh: Array(fresh.values), planes: Array(planeBank.values), cameras: keyframes.map { $0.camPos })
-        for shell in Self.makeRoomShell(bounds: roomBounds, occ: occ) {
-            walls[shell.id] = shell
-        }
+        // One wall per side — drop overlapping copies
+        walls = Self.dedupWalls(walls)
         print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count) occ=\(occ.count)")
 
         stateLock.lock()
@@ -1675,6 +1672,47 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             positions: positions, normals: normals, indices: indices,
             isBackdrop: true
         )
+    }
+
+    /// Keep the largest wall per direction so we don't stack two rooms.
+    private static func dedupWalls(_ input: [UUID: CapturedMeshChunk]) -> [UUID: CapturedMeshChunk] {
+        var buckets: [Int: CapturedMeshChunk] = [:]
+        var scores: [Int: Float] = [:]
+        for chunk in input.values {
+            let t = chunk.transform
+            var minP = SIMD3<Float>(repeating: 1e9)
+            var maxP = SIMD3<Float>(repeating: -1e9)
+            var nSum = SIMD3<Float>(0, 0, 0)
+            for (i, p) in chunk.positions.enumerated() {
+                let w = t * SIMD4<Float>(p.x, p.y, p.z, 1)
+                minP = simd_min(minP, SIMD3(w.x, w.y, w.z))
+                maxP = simd_max(maxP, SIMD3(w.x, w.y, w.z))
+                if i < chunk.normals.count {
+                    let n = t * SIMD4<Float>(chunk.normals[i].x, chunk.normals[i].y, chunk.normals[i].z, 0)
+                    nSum += SIMD3(n.x, n.y, n.z)
+                }
+            }
+            let ext = maxP - minP
+            let area = max(ext.x, 0.1) * max(ext.y, 0.1) * max(ext.z, 0.1) / max(min(ext.x, min(ext.y, ext.z)), 0.05)
+            var n = nSum
+            let nl = simd_length(n)
+            if nl > 1e-5 { n /= nl } else { n = SIMD3(0, 1, 0) }
+            let bucket: Int
+            if abs(n.y) > 0.7 {
+                bucket = n.y > 0 ? 4 : 5 // ceil / floor
+            } else if abs(n.x) >= abs(n.z) {
+                bucket = n.x >= 0 ? 0 : 1
+            } else {
+                bucket = n.z >= 0 ? 2 : 3
+            }
+            if area > (scores[bucket] ?? 0) {
+                scores[bucket] = area
+                buckets[bucket] = chunk
+            }
+        }
+        var out: [UUID: CapturedMeshChunk] = [:]
+        for c in buckets.values { out[c.id] = c }
+        return out
     }
 
     /// Room size from the walk + walls, not just the Tesla mesh.

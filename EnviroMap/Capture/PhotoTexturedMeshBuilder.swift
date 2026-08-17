@@ -289,6 +289,12 @@ enum PhotoTexturedMeshBuilder {
                         if dist < 0.04 || dist > 12 { continue }
                         let facing = abs(simd_dot(nMid, toCam / max(dist, 1e-4)))
                         if facing < 0.28 { continue }
+                        // Don't stamp the car onto the ceiling — photo must face this surface
+                        if chunk.isBackdrop {
+                            let m = kf.worldToCam
+                            let look = SIMD3<Float>(-m.columns.0.z, -m.columns.1.z, -m.columns.2.z)
+                            if simd_dot(look, -nMid) < 0.30 { continue }
+                        }
                         if projectUV(world: mid, kf: kf) == nil { continue }
                         let sharp = Float(max(kf.rgbWidth, 320)) / 640
                         let score = facing * sharp / max(dist, 0.35)
@@ -343,7 +349,9 @@ enum PhotoTexturedMeshBuilder {
                     }
                 }
 
-                // Vertex color path (walls included — never leave a black hole)
+                if chunk.isBackdrop { continue }
+
+                // Vertex color path
                 func emit(_ i: Int) -> UInt32 {
                     if let e = remap[i] { return e }
                     let w = worldP(i)
