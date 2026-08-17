@@ -184,6 +184,7 @@ struct MeshSceneView: UIViewRepresentable {
         view.preferredFramesPerSecond = 30
         view.isPlaying = true
         view.rendersContinuously = true
+        view.delegate = context.coordinator
         view.defaultCameraController.interactionMode = .orbitTurntable
         view.defaultCameraController.inertiaEnabled = true
         // Empty scene first so navigation isn’t blocked
@@ -197,23 +198,71 @@ struct MeshSceneView: UIViewRepresentable {
 
     func updateUIView(_ uiView: SCNView, context: Context) {}
 
-    final class Coordinator {
+    final class Coordinator: NSObject, SCNSceneRendererDelegate {
         weak var view: SCNView?
         var didLoad = false
+        var lookTarget = SIMD3<Float>(0, 1, 0)
+
+        func renderer(_ renderer: SCNSceneRenderer, updateAtTime time: TimeInterval) {
+            guard let cam = renderer.pointOfView else { return }
+            let camPos = SIMD3<Float>(cam.simdWorldPosition)
+            let look = -SIMD3<Float>(cam.simdWorldFront)
+            let lookLen = simd_length(look)
+            guard lookLen > 1e-5 else { return }
+            let lookDir = look / lookLen
+            renderer.scene?.rootNode.enumerateChildNodes { node, _ in
+                guard let name = node.name, name.hasPrefix("photoWall") else { return }
+                let c = SIMD3<Float>(node.simdWorldPosition)
+                var n = SIMD3<Float>(0, 1, 0)
+                if let stored = node.value(forKey: "wallN") as? [Float], stored.count == 3 {
+                    n = simd_normalize(SIMD3(stored[0], stored[1], stored[2]))
+                }
+                let toWall = c - camPos
+                let dist = simd_length(toWall)
+                guard dist > 1e-4 else {
+                    node.isHidden = true
+                    return
+                }
+                let dir = toWall / dist
+                let ahead = simd_dot(dir, lookDir)
+                let facing = simd_dot(n, simd_normalize(camPos - c))
+                // Inspecting this wall (turned toward it, not sitting inside it)
+                let inspecting = ahead > 0.62 && facing > 0.18 && dist > 0.7 && dist < 8
+                if inspecting {
+                    node.isHidden = false
+                    return
+                }
+                // Drop walls that sit between you and the car, or behind you, or too close
+                var hide = ahead < 0.12 || facing < 0.05 || dist < 0.65
+                let toTarget = lookTarget - camPos
+                let tLen = simd_length(toTarget)
+                if tLen > 0.3 {
+                    let tHit = simd_dot(c - camPos, toTarget / tLen)
+                    if tHit > 0.25 && tHit < tLen - 0.2 && dist < tLen {
+                        hide = true
+                    }
+                }
+                node.isHidden = hide
+            }
+        }
 
         /// Frame camera on the actual mesh so user sees the scan immediately (not empty sky).
-        static func frameMesh(in view: SCNView, scene: SCNScene) {
+        static func frameMesh(in view: SCNView, scene: SCNScene, coordinator: Coordinator? = nil) {
             // Ensure materials visible
             scene.background.contents = UIColor.black
             PhotoTexturedMeshBuilder.normalizeForPreview(scene)
 
             let mesh = scene.rootNode.childNode(withName: "coloredMesh", recursively: true) ?? scene.rootNode
 
-            // World-space bounds of all geometry
+            // World-space bounds of LiDAR only (skip walls so we don't sit inside a box)
             var minV = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
             var maxV = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
             var found = false
             func visit(_ n: SCNNode) {
+                if let name = n.name, name.hasPrefix("photoWall") {
+                    for c in n.childNodes { visit(c) }
+                    return
+                }
                 if let g = n.geometry {
                     let (bmin, bmax) = g.boundingBox
                     let corners: [SCNVector3] = [
@@ -245,6 +294,7 @@ struct MeshSceneView: UIViewRepresentable {
             let sz = max(maxV.z - minV.z, 0.4)
             let radius = max(max(sx, sy), sz) * 0.5
             let dist = radius * 2.45
+            coordinator?.lookTarget = SIMD3(cx, cy, cz)
 
             scene.rootNode.childNodes.filter { $0.camera != nil }.forEach { $0.removeFromParentNode() }
 
@@ -317,12 +367,12 @@ struct MeshSceneView: UIViewRepresentable {
                     DispatchQueue.main.async { [weak self] in
                         guard let scnView = self?.view else { return }
                         scnView.scene = scene
-                        Self.frameMesh(in: scnView, scene: scene)
+                        Self.frameMesh(in: scnView, scene: scene, coordinator: self)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                            Self.frameMesh(in: scnView, scene: scene)
+                            Self.frameMesh(in: scnView, scene: scene, coordinator: self)
                         }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            Self.frameMesh(in: scnView, scene: scene)
+                            Self.frameMesh(in: scnView, scene: scene, coordinator: self)
                         }
                         scnView.defaultCameraController.inertiaEnabled = true
                         isLoading.wrappedValue = false

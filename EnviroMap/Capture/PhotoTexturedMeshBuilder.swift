@@ -135,6 +135,12 @@ enum PhotoTexturedMeshBuilder {
         var texUV  = Array(repeating: [Float](), count: kfCount)
         var texIdx = Array(repeating: [UInt32](), count: kfCount)
         var texBase = Array(repeating: UInt32(0), count: kfCount)
+        var wallPos = Array(repeating: [Float](), count: kfCount)
+        var wallNrm = Array(repeating: [Float](), count: kfCount)
+        var wallUV  = Array(repeating: [Float](), count: kfCount)
+        var wallIdx = Array(repeating: [UInt32](), count: kfCount)
+        var wallBase = Array(repeating: UInt32(0), count: kfCount)
+        var wallAvgN = Array(repeating: SIMD3<Float>(0, 1, 0), count: kfCount)
 
         var allPos: [Float] = []
         var allNrm: [Float] = []
@@ -307,6 +313,15 @@ enum PhotoTexturedMeshBuilder {
                             abs((t01 / max(e01, 1e-4)) - (t12 / max(e12, 1e-4))) < 8)
                     if stretchOK {
                         func pushTex(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
+                            if chunk.isBackdrop {
+                                wallPos[ki].append(contentsOf: [w.x, w.y, w.z])
+                                wallNrm[ki].append(contentsOf: [n.x, n.y, n.z])
+                                wallUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
+                                wallAvgN[ki] += n
+                                let id = wallBase[ki]
+                                wallBase[ki] += 1
+                                return id
+                            }
                             texPos[ki].append(contentsOf: [w.x, w.y, w.z])
                             texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
                             texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
@@ -317,12 +332,19 @@ enum PhotoTexturedMeshBuilder {
                         let a = pushTex(w0, n0, u0)
                         let bb = pushTex(w1, n1, u1)
                         let c = pushTex(w2, n2, u2)
-                        texIdx[ki].append(contentsOf: [a, bb, c])
+                        if chunk.isBackdrop {
+                            wallIdx[ki].append(contentsOf: [a, bb, c])
+                        } else {
+                            texIdx[ki].append(contentsOf: [a, bb, c])
+                        }
                         triUsed += 1
                         texTris += 1
                         continue
                     }
                 }
+
+                // Walls never become gray vertex-color slabs — skip if no photo
+                if chunk.isBackdrop { continue }
 
                 // Vertex color path
                 func emit(_ i: Int) -> UInt32 {
@@ -399,6 +421,27 @@ enum PhotoTexturedMeshBuilder {
             geom.materials = [mat]
             let node = SCNNode(geometry: geom)
             node.name = "photoSharp_\(ki)"
+            root.addChildNode(node)
+        }
+
+        for ki in 0..<kfs.count {
+            guard !wallIdx[ki].isEmpty, let img = photo(ki) else { continue }
+            let geom = makeTexturedGeometry(pos: wallPos[ki], nrm: wallNrm[ki], uv: wallUV[ki], idx: wallIdx[ki])
+            let mat = SCNMaterial()
+            mat.lightingModel = .constant
+            mat.isDoubleSided = false
+            mat.cullMode = .back
+            mat.diffuse.contents = img
+            mat.diffuse.wrapS = .clamp
+            mat.diffuse.wrapT = .clamp
+            mat.diffuse.magnificationFilter = .linear
+            mat.diffuse.minificationFilter = .linear
+            mat.diffuse.mipFilter = .none
+            geom.materials = [mat]
+            let node = SCNNode(geometry: geom)
+            node.name = "photoWall_\(ki)"
+            let n = simd_normalize(wallAvgN[ki])
+            node.setValue([n.x, n.y, n.z], forKey: "wallN")
             root.addChildNode(node)
         }
 
