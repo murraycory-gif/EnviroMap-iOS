@@ -925,9 +925,40 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
                 fresh[chunk.id] = chunk
             }
         }
-        // Mesh tiles only. Planes painted giant white slabs through the Tesla.
+        var room = SIMD3<Float>(0, 0, 0)
+        var rc = 0
+        for c in fresh.values {
+            room += SIMD3(c.transform.columns.3.x, c.transform.columns.3.y, c.transform.columns.3.z)
+            rc += 1
+        }
+        if rc > 0 { room /= Float(rc) }
+
+        var walls: [UUID: CapturedMeshChunk] = [:]
+        for plane in frame.anchors.compactMap({ $0 as? ARPlaneAnchor }) {
+            let ext = hypot(plane.extent.x, plane.extent.z)
+            guard ext >= 0.70 else { continue }
+            let origin = SIMD3<Float>(plane.transform.columns.3.x, plane.transform.columns.3.y, plane.transform.columns.3.z)
+            let isWall = plane.alignment == .vertical
+            let isCeil = plane.alignment == .horizontal && origin.y > 1.7
+            guard isWall || isCeil else { continue }
+            guard let raw = Self.copyPlaneChunk(from: plane) else { continue }
+            var n = SIMD3<Float>(plane.transform.columns.1.x, plane.transform.columns.1.y, plane.transform.columns.1.z)
+            let nlen = simd_length(n)
+            if nlen > 1e-5 { n /= nlen } else { n = SIMD3(0, 1, 0) }
+            if simd_dot(n, room - origin) > 0 { n = -n }
+            var t = raw.transform
+            t.columns.3 += SIMD4<Float>(n.x, n.y, n.z, 0) * 0.05
+            walls[raw.id] = CapturedMeshChunk(
+                id: raw.id, transform: t,
+                positions: raw.positions, normals: raw.normals,
+                indices: raw.indices, colors: raw.colors
+            )
+        }
+        print("[EnviroMap] harvest walls=\(walls.count) mesh=\(fresh.count)")
+
         stateLock.lock()
         for (id, chunk) in fresh { chunks[id] = chunk }
+        for (id, chunk) in walls where chunks[id] == nil { chunks[id] = chunk }
         stateLock.unlock()
         ingestKeyframe(from: frame, highRes: true)
     }
@@ -1478,7 +1509,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
 
 
-    /// Wall / floor plane → mesh (fills large black holes LiDAR skipped).
+    /// Vertical wall / high ceiling, split small so photos paint (not white slabs).
     private static func copyPlaneChunk(from plane: ARPlaneAnchor) -> CapturedMeshChunk? {
         let g = plane.geometry
         let vCount = g.vertices.count
@@ -1487,18 +1518,54 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
-        positions.reserveCapacity(vCount)
-        let nrm = SIMD3<Float>(0, 1, 0) // local +Y is the plane normal
+        let nrm = SIMD3<Float>(0, 1, 0)
+        positions.reserveCapacity(max(vCount * 4, 16))
         for i in 0..<vCount {
             let v = g.vertices[i]
             positions.append(SIMD3(v.x, v.y, v.z))
             normals.append(nrm)
         }
         var indices: [UInt32] = []
-        indices.reserveCapacity(iCount)
-        for i in 0..<iCount {
-            indices.append(UInt32(g.triangleIndices[i]))
+        indices.reserveCapacity(max(iCount * 4, 16))
+        for i in 0..<iCount { indices.append(UInt32(g.triangleIndices[i])) }
+
+        func splitOnce() -> Bool {
+            var did = false
+            var out: [UInt32] = []
+            out.reserveCapacity(indices.count * 2)
+            var t = 0
+            while t + 2 < indices.count {
+                let a = Int(indices[t]), b = Int(indices[t + 1]), c = Int(indices[t + 2])
+                t += 3
+                guard a < positions.count, b < positions.count, c < positions.count else { continue }
+                let pa = positions[a], pb = positions[b], pc = positions[c]
+                let ab = simd_length(pb - pa), bc = simd_length(pc - pb), ca = simd_length(pa - pc)
+                let longest = max(ab, max(bc, ca))
+                if longest < 0.32 || positions.count > 12_000 {
+                    out.append(contentsOf: [UInt32(a), UInt32(b), UInt32(c)])
+                    continue
+                }
+                did = true
+                let mid: SIMD3<Float>
+                let i0: Int, i1: Int, i2: Int
+                if ab >= bc && ab >= ca {
+                    mid = (pa + pb) * 0.5; i0 = a; i1 = b; i2 = c
+                } else if bc >= ca {
+                    mid = (pb + pc) * 0.5; i0 = b; i1 = c; i2 = a
+                } else {
+                    mid = (pc + pa) * 0.5; i0 = c; i1 = a; i2 = b
+                }
+                let mi = positions.count
+                positions.append(mid)
+                normals.append(nrm)
+                out.append(contentsOf: [UInt32(i0), UInt32(mi), UInt32(i2), UInt32(mi), UInt32(i1), UInt32(i2)])
+            }
+            indices = out
+            return did
         }
+        var passes = 0
+        while passes < 6, splitOnce() { passes += 1 }
+
         guard indices.count >= 3 else { return nil }
         return CapturedMeshChunk(
             id: plane.identifier,
