@@ -767,6 +767,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var lastBankIdTime: [UUID: TimeInterval] = [:]
     private var planeBank: [UUID: (t: simd_float4x4, w: Float, h: Float, align: ARPlaneAnchor.Alignment, origin: SIMD3<Float>, center: SIMD3<Float>)] = [:]
     private var lastCamPos: SIMD3<Float>?
+    private var lastPlaneBankTime: TimeInterval = 0
     private var kfBusy = false
     private var lastStatsEmit: TimeInterval = 0
     private var maxKeyframes: Int { min(56, MeshDensityConfig.maxKeyframes) }
@@ -788,7 +789,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         scn.automaticallyUpdatesLighting = true
         scn.scene = SCNScene()
         scn.rendersCameraGrain = false
-        scn.preferredFramesPerSecond = 60
+        scn.preferredFramesPerSecond = 30
         scn.contentScaleFactor = min(UIScreen.main.scale, 2.0) // less GPU mid-scan
         scn.delegate = self
         // Yellow feature points + we'll add blue mesh lines for coverage
@@ -841,6 +842,7 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         depthBusy = false
         lastStatsEmit = 0
         lastMarkerUpdate = 0
+        lastPlaneBankTime = 0
         classCounts.removeAll()
         latestAITip = "AI ready · point at your space"
         stateLock.unlock()
@@ -1214,8 +1216,11 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         lastCamPos = pos
 
-        // Remember every wall ARKit ever grew (near or far)
-        bankPlanes(from: frame)
+        // Remember walls — not every frame (that hitch adds up)
+        if ts - lastPlaneBankTime >= 0.28 {
+            lastPlaneBankTime = ts
+            bankPlanes(from: frame)
+        }
 
         // Finish harvest — copy mesh and return immediately (never stall the camera)
         harvestLock.lock()
@@ -1226,16 +1231,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             return
         }
 
-        // Live photos: copy RGB into our memory NOW, then drop the ARFrame.
+        // Live photos: cheap buffer copy here, RGB convert OFF the camera thread
         let kfI = MeshDensityConfig.keyframeInterval(movingFast: moving)
         if ts - lastKeyframeTime >= kfI {
             lastKeyframeTime = ts
             ingestLivePhoto(from: frame)
         }
-        if ts - lastDepthTime >= MeshDensityConfig.depthIngestInterval {
-            lastDepthTime = ts
-            ingestDepthPoints(from: frame, dense: false)
-        }
+        // Depth is finish-only — live unproject froze mid-scan
 
         // Stats only
         if ts - lastStatsEmit >= 0.45 {
@@ -1398,17 +1400,36 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         stateLock.unlock()
     }
 
-    /// Live color: own the pixels immediately. Never keep CVPixelBuffer / ARFrame.
+    /// Live color: copy the camera buffer in ~2ms, convert RGB on a side queue.
     private func ingestLivePhoto(from frame: ARFrame) {
         if kfBusy { return }
         kfBusy = true
-        defer { kfBusy = false }
-        // Every 5th live photo is sharper so the Tesla paint stays readable
         let n = keyframes.count
-        let w = (n % 3 == 0)
+        let w = (n % 5 == 0)
             ? MeshDensityConfig.sharpKeyframeMaxWidth
             : MeshDensityConfig.liveKeyframeMaxWidth
-        storeKeyframe(from: frame, maxWidth: w)
+        let orientation: UIInterfaceOrientation = .portrait
+        let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
+        let snap = PhotoTexturedMeshBuilder.snapCamera(from: frame, orientation: orientation, viewport: viewport)
+        guard let copy = Self.copyPixelBuffer(frame.capturedImage) else {
+            kfBusy = false
+            return
+        }
+        captureQueue.async { [weak self] in
+            guard let self else { return }
+            defer { self.kfBusy = false }
+            guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
+                buffer: copy,
+                snap: snap,
+                maxWidth: w
+            ) else { return }
+            self.stateLock.lock()
+            self.keyframes.append(kf)
+            if self.keyframes.count > self.maxKeyframes {
+                self.keyframes.removeFirst(self.keyframes.count - self.maxKeyframes)
+            }
+            self.stateLock.unlock()
+        }
     }
 
     private func ingestKeyframe(from frame: ARFrame, highRes: Bool = false) {
@@ -1422,7 +1443,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         let orientation: UIInterfaceOrientation = .portrait
         let viewport = arView?.bounds.size ?? CGSize(width: 390, height: 844)
         let snap = PhotoTexturedMeshBuilder.snapCamera(from: frame, orientation: orientation, viewport: viewport)
-        // extractRGBFast copies into [UInt8] before we return — frame is free after this
         guard let kf = PhotoTexturedMeshBuilder.makeKeyframe(
             buffer: frame.capturedImage,
             snap: snap,
@@ -1434,6 +1454,41 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             keyframes.removeFirst(keyframes.count - maxKeyframes)
         }
         stateLock.unlock()
+    }
+
+    /// Fast plane copy so we never hold an ARFrame on a background queue.
+    private static func copyPixelBuffer(_ src: CVPixelBuffer) -> CVPixelBuffer? {
+        let w = CVPixelBufferGetWidth(src)
+        let h = CVPixelBufferGetHeight(src)
+        let fmt = CVPixelBufferGetPixelFormatType(src)
+        var dst: CVPixelBuffer?
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, w, h, fmt, nil, &dst)
+        guard status == kCVReturnSuccess, let dst else { return nil }
+        CVPixelBufferLockBaseAddress(src, .readOnly)
+        CVPixelBufferLockBaseAddress(dst, [])
+        defer {
+            CVPixelBufferUnlockBaseAddress(src, .readOnly)
+            CVPixelBufferUnlockBaseAddress(dst, [])
+        }
+        let planes = CVPixelBufferGetPlaneCount(src)
+        if planes == 0 {
+            if let s = CVPixelBufferGetBaseAddress(src), let d = CVPixelBufferGetBaseAddress(dst) {
+                memcpy(d, s, CVPixelBufferGetDataSize(src))
+            }
+        } else {
+            for p in 0..<planes {
+                guard let s = CVPixelBufferGetBaseAddressOfPlane(src, p),
+                      let d = CVPixelBufferGetBaseAddressOfPlane(dst, p) else { continue }
+                let sh = CVPixelBufferGetHeightOfPlane(src, p)
+                let sStride = CVPixelBufferGetBytesPerRowOfPlane(src, p)
+                let dStride = CVPixelBufferGetBytesPerRowOfPlane(dst, p)
+                let row = min(sStride, dStride)
+                for y in 0..<sh {
+                    memcpy(d.advanced(by: y * dStride), s.advanced(by: y * sStride), row)
+                }
+            }
+        }
+        return dst
     }
 
 
