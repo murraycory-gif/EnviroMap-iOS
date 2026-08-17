@@ -881,52 +881,31 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
     private var harvestDone: DispatchSemaphore?
 
     func forceFinalHarvest() {
-        // Copy mesh from LIVE session callbacks (only place ARMesh buffers are valid).
+        // One fast mesh snapshot. Do NOT decode camera frames here (that retains ARFrames
+        // and kills tracking — harvest then returns 0 tiles).
         let sem = DispatchSemaphore(value: 0)
         harvestLock.lock()
         harvestDone = sem
-        harvestNeeded = 6
+        harvestNeeded = 1
         harvestLock.unlock()
 
-        // Kick one pull immediately if a frame is handy (main or not)
         let kick = {
-            if let frame = self.arView?.session.currentFrame {
-                self.harvestFromFrame(frame)
-            }
+            self.snapshotAllMeshTiles()
+            self.harvestLock.lock()
+            self.harvestNeeded = 0
+            let s = self.harvestDone
+            self.harvestDone = nil
+            self.harvestLock.unlock()
+            s?.signal()
         }
         if Thread.isMainThread { kick() }
         else { DispatchQueue.main.async(execute: kick) }
 
-        // Wait up to 8s for 6 live pulls
-        _ = sem.wait(timeout: .now() + 8.0)
-
+        _ = sem.wait(timeout: .now() + 3.0)
         harvestLock.lock()
         harvestNeeded = 0
         harvestDone = nil
         harvestLock.unlock()
-
-        // Last-ditch if we still have no tiles
-        stateLock.lock()
-        let empty = chunks.isEmpty
-        stateLock.unlock()
-        if empty {
-            let extra = DispatchSemaphore(value: 0)
-            DispatchQueue.main.async {
-                if let frame = self.arView?.session.currentFrame {
-                    var fresh: [UUID: CapturedMeshChunk] = [:]
-                    for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
-                        if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
-                            fresh[chunk.id] = chunk
-                        }
-                    }
-                    self.stateLock.lock()
-                    for (id, c) in fresh { self.chunks[id] = c }
-                    self.stateLock.unlock()
-                }
-                extra.signal()
-            }
-            _ = extra.wait(timeout: .now() + 2.0)
-        }
 
         stateLock.lock()
         let total = chunks.count
@@ -935,45 +914,44 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         print("[EnviroMap] harvest tiles=\(total) verts=\(verts)")
     }
 
-    /// Called from session(didUpdate:) while buffers are valid.
-    private func harvestFromFrame(_ frame: ARFrame) {
-        harvestLock.lock()
-        let need = harvestNeeded
-        harvestLock.unlock()
-        guard need > 0 else { return }
-
+    /// Copy every ARMeshAnchor right now. Fast — no RGB, no depth, no ARFrame hold.
+    private func snapshotAllMeshTiles() {
+        guard let frame = arView?.session.currentFrame else {
+            print("[EnviroMap] harvest: no currentFrame")
+            return
+        }
+        let meshes = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+        print("[EnviroMap] harvest: anchors=\(frame.anchors.count) meshes=\(meshes.count)")
         var fresh: [UUID: CapturedMeshChunk] = [:]
-        for mesh in frame.anchors.compactMap({ $0 as? ARMeshAnchor }) {
+        for mesh in meshes {
             if let chunk = Self.copyChunk(from: mesh, fullQuality: true, liveBank: false) {
                 fresh[chunk.id] = chunk
             }
         }
-        ingestKeyframe(from: frame, highRes: true)
-        if need == 6 || need == 3 || need == 1 {
-            ingestDepthPoints(from: frame, dense: true)
-        }
-
         stateLock.lock()
         for (id, chunk) in fresh {
             if let old = chunks[id],
-               old.positions.count >= chunk.positions.count,
-               old.indices.count >= chunk.indices.count {
+               old.positions.count >= chunk.positions.count {
                 continue
             }
             chunks[id] = chunk
         }
-        let got = chunks.count
         stateLock.unlock()
+    }
 
+    private func harvestFromFrame(_ frame: ARFrame) {
+        // Lightweight: mesh only. Called from didUpdate if a harvest is pending.
         harvestLock.lock()
-        harvestNeeded = max(0, harvestNeeded - 1)
-        let leftover = harvestNeeded
-        let sem = harvestDone
+        let need = harvestNeeded
         harvestLock.unlock()
-        print("[EnviroMap] harvest pull leftover=\(leftover) tiles=\(got)")
-        if leftover == 0 {
-            sem?.signal()
-        }
+        guard need > 0 else { return }
+        snapshotAllMeshTiles()
+        harvestLock.lock()
+        harvestNeeded = 0
+        let s = harvestDone
+        harvestDone = nil
+        harvestLock.unlock()
+        s?.signal()
     }
 
     func buildExportFast() -> FullEnvironmentScanModel.ExportPayload? {
@@ -1185,12 +1163,13 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         lastCamPos = pos
 
-        // Finish harvest — copy mesh NOW while geometry buffers are valid
+        // Finish harvest — copy mesh and return immediately (never stall the camera)
         harvestLock.lock()
         let needHarvest = harvestNeeded > 0
         harvestLock.unlock()
         if needHarvest {
             harvestFromFrame(frame)
+            return
         }
 
         // Color frames — light + capped (do not retain ARFrame)
@@ -1516,55 +1495,37 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
 
 
     private static func copyChunk(from anchor: ARMeshAnchor, fullQuality: Bool = false, liveBank: Bool = false) -> CapturedMeshChunk? {
-        // Defensive: ARKit can invalidate geometry mid-read → EXC_BAD_ACCESS without bounds checks
         let geom = anchor.geometry
-        let vSource = geom.vertices
-        let nSource = geom.normals
+        let vertices = geom.vertices
+        let normalsSrc = geom.normals
         let faces = geom.faces
-        let vCount = vSource.count
+        let vCount = vertices.count
         let fCount = faces.count
-        guard vCount > 0, fCount > 0 else { return nil }
-        guard vSource.stride >= MemoryLayout<SIMD3<Float>>.size else { return nil }
+        guard vCount > 2, fCount > 0 else { return nil }
 
         let step: Int
-        if liveBank {
-            step = vCount > 20_000 ? 2 : 1  // light mid-scan bank only
-        } else if fullQuality {
-            step = 1
-        } else {
-            step = MeshDensityConfig.liveVertexStep(vCount: vCount)
-        }
-
-        let vBuf = vSource.buffer
-        let vBase = vBuf.contents()
-        let vLen = vBuf.length
-        let nBuf = nSource.buffer
-        let nBase = nBuf.contents()
-        let nLen = nBuf.length
-        let hasNormals = nSource.count == vCount && nSource.stride >= MemoryLayout<SIMD3<Float>>.size
+        if liveBank, vCount > 30_000 { step = 2 }
+        else { step = 1 }
 
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
-        positions.reserveCapacity(vCount / max(step, 1) + 1)
-        normals.reserveCapacity(vCount / max(step, 1) + 1)
+        positions.reserveCapacity(vCount / step + 1)
+        normals.reserveCapacity(vCount / step + 1)
         var remap = [Int: Int]()
-        remap.reserveCapacity(vCount / max(step, 1) + 1)
+        remap.reserveCapacity(vCount / step + 1)
+
+        let vBase = vertices.buffer.contents()
+        let nBase = normalsSrc.buffer.contents()
+        let nCount = normalsSrc.count
 
         for i in stride(from: 0, to: vCount, by: step) {
-            let vOff = vSource.offset + vSource.stride * i
-            guard vOff + MemoryLayout<SIMD3<Float>>.size <= vLen else { break }
-            let vp = vBase.advanced(by: vOff).assumingMemoryBound(to: SIMD3<Float>.self).pointee
-            // Skip NaNs / insane verts
-            if !vp.x.isFinite || !vp.y.isFinite || !vp.z.isFinite { continue }
+            let vp = vBase.advanced(by: vertices.offset + vertices.stride * i)
+                .assumingMemoryBound(to: SIMD3<Float>.self).pointee
             positions.append(vp)
-            if hasNormals {
-                let nOff = nSource.offset + nSource.stride * i
-                if nOff + MemoryLayout<SIMD3<Float>>.size <= nLen {
-                    let np = nBase.advanced(by: nOff).assumingMemoryBound(to: SIMD3<Float>.self).pointee
-                    normals.append(np.x.isFinite ? np : SIMD3(0, 1, 0))
-                } else {
-                    normals.append(SIMD3(0, 1, 0))
-                }
+            if nCount == vCount {
+                let np = nBase.advanced(by: normalsSrc.offset + normalsSrc.stride * i)
+                    .assumingMemoryBound(to: SIMD3<Float>.self).pointee
+                normals.append(np)
             } else {
                 normals.append(SIMD3(0, 1, 0))
             }
@@ -1572,36 +1533,30 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
         }
         guard !positions.isEmpty else { return nil }
 
-        let fBuf = faces.buffer
-        let fBase = fBuf.contents()
-        let fLen = fBuf.length
-        let idxPer = faces.indexCountPerPrimitive
-        let bpi = faces.bytesPerIndex
-        guard idxPer >= 3, bpi == 2 || bpi == 4 else { return nil }
-
-        var indices = [UInt32]()
+        var indices: [UInt32] = []
         indices.reserveCapacity(fCount * 3)
+        let fBase = faces.buffer.contents()
+        let bpi = faces.bytesPerIndex
+        let per = max(faces.indexCountPerPrimitive, 3)
+
         for f in 0..<fCount {
-            var tri = [UInt32]()
-            tri.reserveCapacity(3)
+            var tri: [UInt32] = []
             var ok = true
-            for c in 0..<idxPer {
-                let off = (f * idxPer + c) * bpi
-                guard off + bpi <= fLen else { ok = false; break }
-                let base = fBase.advanced(by: off)
+            for c in 0..<min(per, 3) {
+                let off = (f * per + c) * bpi
+                let p = fBase.advanced(by: off)
                 let raw: Int
                 if bpi == 2 {
-                    raw = Int(base.assumingMemoryBound(to: UInt16.self).pointee)
+                    raw = Int(p.assumingMemoryBound(to: UInt16.self).pointee)
                 } else {
-                    raw = Int(base.assumingMemoryBound(to: UInt32.self).pointee)
+                    raw = Int(p.assumingMemoryBound(to: UInt32.self).pointee)
                 }
-                guard raw >= 0, raw < vCount else { ok = false; break }
                 let snapped = (raw / step) * step
                 guard let mapped = remap[snapped] else { ok = false; break }
                 tri.append(UInt32(mapped))
             }
-            if ok, tri.count >= 3, tri[0] != tri[1], tri[1] != tri[2] {
-                indices.append(contentsOf: tri.prefix(3))
+            if ok, tri.count == 3, tri[0] != tri[1], tri[1] != tri[2] {
+                indices.append(contentsOf: tri)
             }
         }
         guard !indices.isEmpty else { return nil }
@@ -1614,7 +1569,6 @@ final class FullEnvScanController: UIViewController, ARSCNViewDelegate, ARSessio
             indices: indices
         )
     }
-
 
     private static func copyPixelBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
         let width = CVPixelBufferGetWidth(source)
