@@ -35,7 +35,7 @@ enum PhotoTexturedMeshBuilder {
     static var progressHandler: ((Double, String) -> Void)?
 
     /// Hard ceiling so bake never hangs on phone
-    private static let bakeDeadlineSeconds: CFTimeInterval = 60
+    private static let bakeDeadlineSeconds: CFTimeInterval = 22
     /// Fallback color when paint times out — always visible on dark bg
     private static let visibleGray: (UInt8, UInt8, UInt8) = (168, 172, 178)
     /// Depth colors for hole fill (set only during buildScene)
@@ -107,10 +107,15 @@ enum PhotoTexturedMeshBuilder {
         }
 
         let kfs = selectKeyframes(keyframes, limit: MeshDensityConfig.bakeKeyframeLimit)
-        let photos: [UIImage?] = kfs.map { imageFromRGB($0.rgb, width: $0.rgbWidth, height: $0.rgbHeight) }
-        func kiOk(_ i: Int) -> Bool {
-            i >= 0 && i < photos.count && photos[i] != nil
+        var photoCache: [Int: UIImage] = [:]
+        func photo(_ i: Int) -> UIImage? {
+            if let p = photoCache[i] { return p }
+            guard i >= 0, i < kfs.count else { return nil }
+            let img = imageFromRGB(kfs[i].rgb, width: kfs[i].rgbWidth, height: kfs[i].rgbHeight)
+            if let img { photoCache[i] = img }
+            return img
         }
+        func kiOk(_ i: Int) -> Bool { i >= 0 && i < kfs.count }
 
         let scene = SCNScene()
         scene.background.contents = UIColor(white: 0.08, alpha: 1)
@@ -176,6 +181,30 @@ enum PhotoTexturedMeshBuilder {
                 return len > 1e-6 ? nn / len : SIMD3(0, 1, 0)
             }
 
+            // ONE photo for this whole tile (per-triangle photos shredded AK)
+            var chunkKf: Int? = nil
+            if !kfs.isEmpty, vCount > 0 {
+                var scores = Array(repeating: 0, count: kfs.count)
+                let sampleN = min(vCount, 20)
+                for si in 0..<sampleN {
+                    let vi = si * vCount / sampleN
+                    let w = worldP(vi)
+                    let n = worldN(vi)
+                    for (ki, kf) in kfs.enumerated() {
+                        let toCam = kf.camPos - w
+                        let dist = simd_length(toCam)
+                        if dist < 0.08 || dist > 6.5 { continue }
+                        let facing = abs(simd_dot(n, toCam / max(dist, 1e-4)))
+                        if facing < 0.30 { continue }
+                        if projectUV(world: w, kf: kf) != nil { scores[ki] += 1 }
+                    }
+                }
+                if let best = scores.enumerated().max(by: { $0.element < $1.element }),
+                   best.element >= 4 {
+                    chunkKf = best.offset
+                }
+            }
+
             // Color only vertices we emit (lazy cache)
             var colorCache = [Int: (UInt8, UInt8, UInt8)]()
             func colorAt(_ i: Int) -> (UInt8, UInt8, UInt8) {
@@ -222,25 +251,33 @@ enum PhotoTexturedMeshBuilder {
                 let mid = (w0 + w1 + w2) / 3
                 let nMid = simd_normalize(n0 + n1 + n2)
 
-                // Photo UV off — AK warped. Vertex color only (AJ look).
-
-
-                // Photo texture when one camera sees the whole triangle (picture-clear).
-                func bestKf(_ w: SIMD3<Float>, _ n: SIMD3<Float>) -> Int? {
-                    var bi = -1
-                    var bw: Float = -1
-                    for (i, kf) in kfs.enumerated() {
-                        guard kiOk(i) else { continue }
-                        let toCam = kf.camPos - w
-                        let dist = simd_length(toCam)
-                        if dist < 0.06 || dist > 7 { continue }
-                        let facing = abs(simd_dot(n, toCam / max(dist, 1e-4)))
-                        if facing < 0.28 { continue }
-                        guard projectUV(world: w, kf: kf) != nil else { continue }
-                        let score = facing * facing / max(dist, 0.2)
-                        if score > bw { bw = score; bi = i }
+                if let ki = chunkKf,
+                   let u0 = projectUV(world: w0, kf: kfs[ki]),
+                   let u1 = projectUV(world: w1, kf: kfs[ki]),
+                   let u2 = projectUV(world: w2, kf: kfs[ki]) {
+                    let e01 = simd_length(w1 - w0), e12 = simd_length(w2 - w1), e20 = simd_length(w0 - w2)
+                    let t01 = simd_length(u1 - u0), t12 = simd_length(u2 - u1), t20 = simd_length(u0 - u2)
+                    let wMax = max(e01, max(e12, e20))
+                    let uvArea = abs((u1.x - u0.x) * (u2.y - u0.y) - (u2.x - u0.x) * (u1.y - u0.y))
+                    // Skip stretched UVs (that's the AK mess)
+                    let stretchOK = wMax < 0.55 && uvArea > 2e-6 && t01 > 1e-5 && e01 > 1e-4 &&
+                        abs((t01 / max(e01, 1e-4)) - (t12 / max(e12, 1e-4))) < 8
+                    if stretchOK {
+                        func pushTex(_ w: SIMD3<Float>, _ n: SIMD3<Float>, _ uv: SIMD2<Float>) -> UInt32 {
+                            texPos[ki].append(contentsOf: [w.x, w.y, w.z])
+                            texNrm[ki].append(contentsOf: [n.x, n.y, n.z])
+                            texUV[ki].append(contentsOf: [uv.x, 1 - uv.y])
+                            let id = texBase[ki]
+                            texBase[ki] += 1
+                            return id
+                        }
+                        let a = pushTex(w0, n0, u0)
+                        let bb = pushTex(w1, n1, u1)
+                        let c = pushTex(w2, n2, u2)
+                        texIdx[ki].append(contentsOf: [a, bb, c])
+                        triUsed += 1
+                        continue
                     }
-                    return bi >= 0 ? bi : nil
                 }
 
                 // Vertex color path
@@ -303,7 +340,7 @@ enum PhotoTexturedMeshBuilder {
         progressHandler?(0.88, "Building 3D View…")
 
         for ki in 0..<kfs.count {
-            guard !texIdx[ki].isEmpty, let img = photos[ki] else { continue }
+            guard !texIdx[ki].isEmpty, let img = photo(ki) else { continue }
             let geom = makeTexturedGeometry(pos: texPos[ki], nrm: texNrm[ki], uv: texUV[ki], idx: texIdx[ki])
             let mat = SCNMaterial()
             mat.lightingModel = .constant
